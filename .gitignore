@@ -2,6 +2,16 @@
 .gradle/
 build/
 
+# Python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.mypy_cache/
+
+# OS/filesystem noise
+.DS_Store
+
 # Local configuration file (sdk path, etc)
 local.properties
 

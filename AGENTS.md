@@ -268,3 +268,4 @@ Coding style
 
 1. Branch from `main` with a descriptive name: `feature/<slug>` or `bugfix/<slug>`.
 2. Keep commits atomic; prefer checkpoints (`feat: …`, `test: …`).
+3. Always update .gitignore everytime a workflow is done or new components, dependencies, frameworks or files are introduced.
