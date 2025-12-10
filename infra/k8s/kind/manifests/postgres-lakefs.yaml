@@ -1,0 +1,45 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: lakefs-postgres
+  namespace: dfp
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: lakefs-postgres
+  template:
+    metadata:
+      labels:
+        app: lakefs-postgres
+    spec:
+      containers:
+        - name: postgres
+          image: postgres:14
+          env:
+            - name: POSTGRES_USER
+              value: lakefs
+            - name: POSTGRES_PASSWORD
+              value: lakefs
+            - name: POSTGRES_DB
+              value: lakefs
+          ports:
+            - containerPort: 5432
+          volumeMounts:
+            - name: pgdata
+              mountPath: /var/lib/postgresql/data
+      volumes:
+        - name: pgdata
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: lakefs-postgres
+  namespace: dfp
+spec:
+  selector:
+    app: lakefs-postgres
+  ports:
+    - port: 5432
+      targetPort: 5432

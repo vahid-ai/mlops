@@ -1,0 +1,54 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: lakefs
+  namespace: dfp
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: lakefs
+  template:
+    metadata:
+      labels:
+        app: lakefs
+    spec:
+      containers:
+        - name: lakefs
+          image: treeverse/lakefs:latest
+          env:
+            - name: LAKEFS_DATABASE_CONNECTION_STRING
+              value: postgres://lakefs:lakefs@lakefs-postgres.dfp.svc.cluster.local:5432/lakefs?sslmode=disable
+            - name: LAKEFS_AUTH_ENCRYPT_SECRET_KEY
+              value: 0123456789abcdef0123456789abcdef
+            - name: LAKEFS_BLOCKSTORE_TYPE
+              value: s3
+            - name: LAKEFS_BLOCKSTORE_S3_REGION
+              value: us-east-1
+            - name: LAKEFS_BLOCKSTORE_S3_ENDPOINT
+              value: http://minio.dfp.svc.cluster.local:9000
+            - name: LAKEFS_BLOCKSTORE_S3_FORCE_PATH_STYLE
+              value: "true"
+            - name: LAKEFS_BLOCKSTORE_S3_CREDENTIALS_ACCESS_KEY_ID
+              value: minioadmin
+            - name: LAKEFS_BLOCKSTORE_S3_CREDENTIALS_SECRET_ACCESS_KEY
+              value: minioadmin
+            - name: LAKEFS_LOGGING_LEVEL
+              value: INFO
+          ports:
+            - containerPort: 8000
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: lakefs
+  namespace: dfp
+spec:
+  type: NodePort
+  selector:
+    app: lakefs
+  ports:
+    - name: api
+      port: 8000
+      targetPort: 8000
+      nodePort: 30080
