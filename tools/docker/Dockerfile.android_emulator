@@ -1,0 +1,2 @@
+# Placeholder Dockerfile for Android emulator
+FROM ubuntu:22.04

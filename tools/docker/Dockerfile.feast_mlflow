@@ -1,0 +1,2 @@
+# Placeholder Dockerfile for Feast + MLflow component image
+FROM python:3.11-slim

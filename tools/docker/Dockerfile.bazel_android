@@ -1,0 +1,2 @@
+# Placeholder Dockerfile for Bazel Android builds
+FROM gcr.io/android/bazel:latest

@@ -1,0 +1,7 @@
+model: ae_small
+data: android_logs_dev
+engine: spark
+feature_store: feast
+export: executorch_android
+device: galaxy_s24
+orchestration: kubeflow

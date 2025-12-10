@@ -1,0 +1,2 @@
+catalog: local
+warehouse: file:///tmp/warehouse

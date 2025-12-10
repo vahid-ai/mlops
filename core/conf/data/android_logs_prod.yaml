@@ -1,0 +1,5 @@
+lakefs_repo: dfp-data
+branch: prod
+training_table: iceberg://logs_prod/training
+validation_table: iceberg://logs_prod/validation
+test_table: iceberg://logs_prod/test

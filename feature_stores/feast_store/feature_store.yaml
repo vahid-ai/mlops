@@ -1,0 +1,6 @@
+project: dfp
+registry: data/registry.db
+offline_store:
+  type: spark
+online_store:
+  type: redis

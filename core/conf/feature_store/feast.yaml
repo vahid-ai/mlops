@@ -1,0 +1,3 @@
+project: dfp
+offline_store: spark
+online_store: redis

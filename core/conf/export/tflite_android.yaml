@@ -1,0 +1,2 @@
+quantization: fp16
+output_path: artifacts/model.tflite

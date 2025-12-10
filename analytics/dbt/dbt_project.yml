@@ -1,0 +1,4 @@
+name: dfp_analytics
+version: '1.0'
+profile: dfp
+model-paths: ["models"]

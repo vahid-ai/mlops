@@ -1,0 +1,9 @@
+name: kfp_pipeline_compile
+on: [push]
+jobs:
+  compile:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compile pipelines
+        run: echo "compile kfp"
