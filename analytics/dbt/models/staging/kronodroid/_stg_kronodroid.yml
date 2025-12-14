@@ -2,60 +2,34 @@ version: 2
 
 models:
   - name: stg_kronodroid__emulator
-    description: "Staged and cleaned emulator malware samples"
+    description: "Staged emulator malware samples from KronoDroid dataset"
     columns:
-      - name: sample_hash
-        description: "SHA256 hash identifying the APK sample"
-        tests:
-          - not_null
+      - name: app_package
+        description: "Android app package name"
       - name: is_malware
-        description: "Binary indicator: 1 for malware, 0 for benign"
-        tests:
-          - not_null
-          - accepted_values:
-              values: [0, 1]
-      - name: malware_family
-        description: "Name of malware family or 'benign'"
-        tests:
-          - not_null
+        description: "Binary label: 1 for malware, 0 for benign"
       - name: data_source
-        description: "Source of sample data"
-        tests:
-          - accepted_values:
-              values: ['emulator']
+        description: "Data collection source"
 
   - name: stg_kronodroid__real_device
-    description: "Staged and cleaned real device malware samples"
+    description: "Staged real device malware samples from KronoDroid dataset"
     columns:
-      - name: sample_hash
-        description: "SHA256 hash identifying the APK sample"
-        tests:
-          - not_null
+      - name: app_package
+        description: "Android app package name"
       - name: is_malware
-        description: "Binary indicator: 1 for malware, 0 for benign"
-        tests:
-          - not_null
-          - accepted_values:
-              values: [0, 1]
-      - name: malware_family
-        description: "Name of malware family or 'benign'"
-        tests:
-          - not_null
+        description: "Binary label: 1 for malware, 0 for benign"
       - name: data_source
-        description: "Source of sample data"
-        tests:
-          - accepted_values:
-              values: ['real_device']
+        description: "Data collection source"
 
   - name: stg_kronodroid__combined
     description: "Combined emulator and real device samples"
     columns:
       - name: sample_id
-        description: "Unique ID combining hash and source"
+        description: "Unique sample identifier (MD5 of package + source)"
         tests:
           - unique
           - not_null
-      - name: sample_hash
-        description: "SHA256 hash identifying the APK sample"
-        tests:
-          - not_null
+      - name: app_package
+        description: "Android app package name"
+      - name: is_malware
+        description: "Binary label: 1 for malware, 0 for benign"

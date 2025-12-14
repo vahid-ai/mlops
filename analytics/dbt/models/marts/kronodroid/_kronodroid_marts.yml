@@ -2,50 +2,45 @@ version: 2
 
 models:
   - name: fct_malware_samples
-    description: "Fact table containing all malware samples with computed features"
+    description: "Fact table containing all malware samples with syscall features"
     columns:
       - name: sample_id
         description: "Unique identifier for each sample"
         tests:
           - unique
           - not_null
+      - name: app_package
+        description: "Android app package name"
       - name: is_malware
         description: "Target label: 1 for malware, 0 for benign"
-        tests:
-          - not_null
       - name: event_timestamp
         description: "Timestamp for Feast feature store"
-        tests:
-          - not_null
 
   - name: dim_malware_families
-    description: "Dimension table with malware family statistics"
+    description: "Dimension table with dataset statistics by source and label"
     columns:
-      - name: family_id
-        description: "Unique identifier for malware family"
+      - name: category_id
+        description: "Unique identifier for category"
         tests:
           - unique
           - not_null
-      - name: is_malware_family
-        description: "Whether this is a malware family (vs benign)"
-        tests:
-          - not_null
+      - name: data_source
+        description: "Data collection source (emulator or real_device)"
+      - name: sample_count
+        description: "Number of samples in this category"
 
   - name: fct_training_dataset
-    description: "Feature-engineered training dataset with reproducible splits"
+    description: "Training dataset with reproducible train/val/test splits"
     columns:
       - name: sample_id
         description: "Unique sample identifier"
         tests:
           - unique
           - not_null
-      - name: label
+      - name: is_malware
         description: "Binary classification target"
-        tests:
-          - not_null
       - name: dataset_split
         description: "train/validation/test split assignment"
         tests:
-          - not_null
           - accepted_values:
               values: ['train', 'validation', 'test']

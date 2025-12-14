@@ -57,3 +57,8 @@ google-services.json
 analytics/dbt/target/
 analytics/dbt/data/*.duckdb
 analytics/dbt/profiles/.user.yml
+
+# Jupyter notebooks
+.ipynb_checkpoints/
+*.ipynb_checkpoints/
+notebooks/.ipynb_checkpoints/

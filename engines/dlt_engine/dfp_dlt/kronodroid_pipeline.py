@@ -1,6 +1,6 @@
 """KronoDroid dataset ingestion pipeline using dlt.
 
-Ingests data from Kaggle and writes Avro format to MinIO/LakeFS
+Ingests data from Kaggle and writes columnar files to MinIO/LakeFS
 for consumption by Spark and dbt-spark.
 """
 
@@ -15,7 +15,6 @@ from .minio_destination import (
     MinioConfig,
     ensure_lakefs_repository,
     ensure_minio_bucket,
-    get_avro_loader_config,
     get_lakefs_destination,
     get_minio_destination,
 )
@@ -25,20 +24,22 @@ def run_kronodroid_pipeline(
     destination: str = "minio",
     dataset_name: str = "kronodroid_raw",
     lakefs_branch: str | None = None,
-    file_format: str = "avro",
+    file_format: str = "parquet",
 ) -> dlt.Pipeline:
     """Run the KronoDroid data ingestion pipeline.
 
     Downloads the KronoDroid-2021 dataset from Kaggle and loads it into
     either MinIO directly or via LakeFS for versioning.
 
-    Data is written in Avro format for optimal Spark consumption.
+    Data is written in a dlt-supported loader format. For Spark consumption,
+    Parquet is the default and recommended option.
 
     Args:
         destination: Either 'minio' or 'lakefs'
         dataset_name: Name for the dataset in the destination
         lakefs_branch: LakeFS branch name (only used if destination='lakefs')
-        file_format: Output format ('avro' recommended for Spark)
+        file_format: Output format ('parquet' recommended). Note that recent
+            dlt versions do not support `loader_file_format="avro"`.
 
     Returns:
         The dlt pipeline object with run info
@@ -63,8 +64,9 @@ def run_kronodroid_pipeline(
         dest = get_minio_destination(config, file_format=file_format)
         pipeline_name = "kronodroid_minio"
 
-    # Get Avro-specific loader configuration
-    loader_config = get_avro_loader_config() if file_format == "avro" else {}
+    # dlt validates loader formats; map legacy "avro" requests to parquet.
+    # (We still support local Avro export separately via run_kronodroid_to_avro.)
+    effective_loader_format = "parquet" if file_format == "avro" else file_format
 
     pipeline = dlt.pipeline(
         pipeline_name=pipeline_name,
@@ -77,10 +79,11 @@ def run_kronodroid_pipeline(
     # Run with Avro loader format
     info = pipeline.run(
         source,
-        loader_file_format=file_format,
+        loader_file_format=effective_loader_format,
     )
     print(f"Pipeline completed: {info}")
-    print(f"  - Format: {file_format}")
+    print(f"  - Format requested: {file_format}")
+    print(f"  - Loader format used: {effective_loader_format}")
     print(f"  - Dataset: {dataset_name}")
 
     return pipeline

@@ -37,6 +37,11 @@ See inline README stubs and doc files under `docs/` for guidance on how each pac
   - MinIO Console: `http://localhost:19001`
   - MLflow: `http://localhost:5050`
   - Redis: `127.0.0.1:16379` (use `redis-cli -h 127.0.0.1 -p 16379 ping`)
+  - Feast feature server: `http://localhost:16566`
+- Optional addons (installed by `task up WITH_SPARK_OPERATOR=1 WITH_FEAST=1` or `task addons:up`):
+  - Spark Operator (SparkApplication CRD/controller)
+  - Feast feature server (serving from an embedded `registry.db`)
+- Kubeflow Pipelines: `task kfp:up` (requires network to fetch upstream manifests)
 - For cloud, reuse the same manifests with overlays to swap NodePort → LoadBalancer/Ingress and point LakeFS/MLflow at managed object storage + Postgres.
 
 ## Kronodroid Data Pipeline

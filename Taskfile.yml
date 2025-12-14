@@ -6,6 +6,9 @@ vars:
   KUSTOMIZE_DIR: '{{.KUSTOMIZE_DIR | default "./infra/k8s/kind/manifests"}}'
   NAMESPACE: '{{.NAMESPACE | default "dfp"}}'
   PORT_FORWARD: '{{.PORT_FORWARD | default "1"}}'
+  WITH_SPARK_OPERATOR: '{{.WITH_SPARK_OPERATOR | default "0"}}'
+  WITH_FEAST: '{{.WITH_FEAST | default "0"}}'
+  WITH_KFP: '{{.WITH_KFP | default "0"}}'
 
 tasks:
   tools:
@@ -52,6 +55,45 @@ tasks:
     cmds:
       - bash ./tools/scripts/kind_portforward.sh status
 
+  addons:up:
+    desc: Install optional addons (Spark Operator, Feast)
+    cmds:
+      - task: spark-operator:up
+      - task: feast:up
+
+  addons:down:
+    desc: Remove optional addons (Spark Operator, Feast)
+    cmds:
+      - task: feast:down
+      - task: spark-operator:down
+
+  spark-operator:up:
+    desc: Install Spark Operator (SparkApplication CRD + controller)
+    cmds:
+      - kubectl apply -k ./infra/k8s/kind/addons/spark-operator
+      - kubectl -n "{{.NAMESPACE}}" rollout status deployment/spark-operator --timeout=180s
+
+  spark-operator:down:
+    desc: Remove Spark Operator resources
+    cmds:
+      - kubectl delete -k ./infra/k8s/kind/addons/spark-operator --ignore-not-found
+
+  feast:up:
+    desc: Install Feast feature server (uses Redis in dfp namespace)
+    cmds:
+      - kubectl apply -k ./infra/k8s/kind/addons/feast
+      - kubectl -n "{{.NAMESPACE}}" rollout status deployment/feast-feature-server --timeout=180s
+
+  feast:down:
+    desc: Remove Feast feature server resources
+    cmds:
+      - kubectl delete -k ./infra/k8s/kind/addons/feast --ignore-not-found
+
+  kfp:up:
+    desc: Install Kubeflow Pipelines (requires network)
+    cmds:
+      - bash ./tools/scripts/kfp_install.sh
+
   kind:up:
     desc: Bootstrap kind + apply kustomize overlay
     env:
@@ -60,6 +102,9 @@ tasks:
       KIND_CONFIG: "{{.KIND_CONFIG}}"
       KUSTOMIZE_DIR: "{{.KUSTOMIZE_DIR}}"
       PORT_FORWARD: "{{.PORT_FORWARD}}"
+      WITH_SPARK_OPERATOR: "{{.WITH_SPARK_OPERATOR}}"
+      WITH_FEAST: "{{.WITH_FEAST}}"
+      WITH_KFP: "{{.WITH_KFP}}"
     cmds:
       - bash ./tools/scripts/kind_bootstrap.sh
 

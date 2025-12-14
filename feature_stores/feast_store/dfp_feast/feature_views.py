@@ -1,14 +1,8 @@
-"""Feast feature view definitions."""
-from feast import Field, FeatureView
-from feast.types import Float32
-from feast.data_source import DataSource
+"""Feast feature view definitions.
 
-users_source = DataSource(name="users", path="iceberg://users_features")
+This module contains placeholder feature views. The main Kronodroid feature
+views are defined in kronodroid_features.py.
+"""
 
-user_daily_features = FeatureView(
-    name="user_daily_features",
-    entities=["user"],
-    ttl=None,
-    schema=[Field(name="score", dtype=Float32)],
-    source=users_source,
-)
+# Note: This file is kept for potential future non-Kronodroid feature views.
+# Currently empty as the old placeholder used an abstract DataSource incorrectly.

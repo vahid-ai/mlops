@@ -85,12 +85,10 @@ def get_minio_destination(
             "endpoint_url": config.endpoint_url,
             "region_name": config.region,
         },
+        # dlt's filesystem destination uses `layout` to control object key structure
+        layout="{table_name}/{file_id}.{ext}",
     )
 
-    # Set the loader file format via config
-    # Note: dlt uses 'avro' format for Avro output
-    dest.config.layout = "{table_name}/{file_id}.{ext}"
-    
     return dest
 
 
@@ -117,10 +115,9 @@ def get_lakefs_destination(
             "aws_secret_access_key": config.secret_access_key,
             "endpoint_url": config.endpoint_url,
         },
+        layout="{table_name}/{file_id}.{ext}",
     )
 
-    dest.config.layout = "{table_name}/{file_id}.{ext}"
-    
     return dest
 
 

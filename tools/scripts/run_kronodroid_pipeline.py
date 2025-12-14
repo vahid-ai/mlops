@@ -3,13 +3,13 @@
 Kronodroid Data Pipeline Orchestration Script.
 
 This script orchestrates the full data ingestion and transformation pipeline:
-1. Download Kronodroid dataset from Kaggle using dlt → Avro → MinIO
+1. Download Kronodroid dataset from Kaggle using dlt → Parquet → MinIO
 2. Run dbt-spark transformations → Iceberg tables on LakeFS
 3. Register features with Feast and materialize to online store
 4. Commit changes to LakeFS for version tracking
 
 Data Flow:
-    dlt (Kaggle) → Avro → MinIO → Spark + dbt → Iceberg (LakeFS) → Feast
+    dlt (Kaggle) → Parquet → MinIO → Spark + dbt → Iceberg (LakeFS) → Feast
 
 Usage:
     # Full pipeline
@@ -48,17 +48,17 @@ def load_env_file(env_path: Path = PROJECT_ROOT / ".env"):
                 os.environ.setdefault(key.strip(), value.strip())
 
 
-def run_dlt_ingestion(file_format: str = "avro") -> bool:
+def run_dlt_ingestion(file_format: str = "parquet") -> bool:
     """Run dlt pipeline to ingest Kronodroid data from Kaggle to MinIO.
 
     Args:
-        file_format: Output format (avro recommended for Spark)
+        file_format: Output format (parquet recommended for Spark)
 
     Returns:
         True if successful
     """
     print("\n" + "=" * 60)
-    print("Step 1: Running dlt ingestion from Kaggle → Avro → MinIO")
+    print("Step 1: Running dlt ingestion from Kaggle → Parquet → MinIO")
     print("=" * 60)
 
     from engines.dlt_engine.dfp_dlt import run_kronodroid_pipeline
@@ -305,8 +305,8 @@ def main():
     parser.add_argument(
         "--file-format",
         choices=["avro", "parquet"],
-        default="avro",
-        help="Raw data format from dlt (default: avro)",
+        default="parquet",
+        help="Raw data format from dlt (default: parquet; 'avro' is mapped to parquet for dlt)",
     )
 
     args = parser.parse_args()
@@ -324,14 +324,14 @@ def main():
     print(f"  dbt target: {args.dbt_target}")
     print(f"  Raw format: {args.file_format}")
     print("")
-    print("  Flow: Kaggle → dlt → Avro → MinIO → Spark → Iceberg → LakeFS → Feast")
+    print("  Flow: Kaggle → dlt → Parquet → MinIO → Spark → Iceberg → LakeFS → Feast")
 
     success = True
 
     if args.materialize_only:
         success = run_feast_materialize(args.materialize_days)
     else:
-        # Step 1: dlt ingestion to MinIO (Avro format)
+        # Step 1: dlt ingestion to MinIO (Parquet format)
         if not args.skip_ingestion:
             if not run_dlt_ingestion(file_format=args.file_format):
                 success = False

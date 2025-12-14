@@ -1,0 +1,66 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: feast-feature-server
+  namespace: dfp
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: feast-feature-server
+  template:
+    metadata:
+      labels:
+        app: feast-feature-server
+    spec:
+      containers:
+        - name: feature-server
+          image: feastdev/feature-server:latest
+          args:
+            - serve
+            - --host
+            - 0.0.0.0
+            - --port
+            - "6566"
+          env:
+            - name: FEAST_FEATURE_STORE_YAML
+              value: /feast/feature_store.yaml
+            - name: REDIS_CONNECTION_STRING
+              value: redis://redis.dfp.svc.cluster.local:6379
+            - name: LAKEFS_ENDPOINT_URL
+              value: http://lakefs.dfp.svc.cluster.local:8000
+          ports:
+            - name: http
+              containerPort: 6566
+          volumeMounts:
+            - name: feast-config
+              mountPath: /feast
+              readOnly: true
+      volumes:
+        - name: feast-config
+          projected:
+            sources:
+              - configMap:
+                  name: feast-feature-store
+                  items:
+                    - key: feature_store.yaml
+                      path: feature_store.yaml
+              - configMap:
+                  name: feast-repo
+                  items:
+                    - key: registry.db
+                      path: registry.db
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: feast-feature-server
+  namespace: dfp
+spec:
+  selector:
+    app: feast-feature-server
+  ports:
+    - name: http
+      port: 6566
+      targetPort: 6566
+

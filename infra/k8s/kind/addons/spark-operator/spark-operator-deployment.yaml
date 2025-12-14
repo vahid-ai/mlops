@@ -1,0 +1,27 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: spark-operator
+  namespace: dfp
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: spark-operator
+  template:
+    metadata:
+      labels:
+        app: spark-operator
+    spec:
+      serviceAccountName: spark-operator
+      containers:
+        - name: spark-operator
+          image: ghcr.io/kubeflow/spark-operator:v1beta2-1.3.9-3.5.0
+          args:
+            - -v=2
+            - -namespace=
+            - -enable-webhook=false
+          ports:
+            - name: metrics
+              containerPort: 10254
+

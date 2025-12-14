@@ -13,6 +13,7 @@ MINIO_API_LOCAL_PORT="${MINIO_API_LOCAL_PORT:-19000}"
 MINIO_CONSOLE_LOCAL_PORT="${MINIO_CONSOLE_LOCAL_PORT:-19001}"
 MLFLOW_LOCAL_PORT="${MLFLOW_LOCAL_PORT:-5050}"
 REDIS_LOCAL_PORT="${REDIS_LOCAL_PORT:-16379}"
+FEAST_LOCAL_PORT="${FEAST_LOCAL_PORT:-16566}"
 
 PF_DIR="${ROOT_DIR}/.task/port-forwards/${CLUSTER_NAME}/${NAMESPACE}"
 
@@ -154,6 +155,7 @@ case "${ACTION}" in
     if ! start_one minio-console svc/minio "${MINIO_CONSOLE_LOCAL_PORT}" 9001; then failures=1; fi
     if ! start_one mlflow svc/mlflow "${MLFLOW_LOCAL_PORT}" 5000; then failures=1; fi
     if ! start_one redis svc/redis "${REDIS_LOCAL_PORT}" 6379; then failures=1; fi
+    if ! start_one feast svc/feast-feature-server "${FEAST_LOCAL_PORT}" 6566; then failures=1; fi
     exit "${failures}"
     ;;
   stop)
@@ -164,6 +166,7 @@ case "${ACTION}" in
     if ! stop_one minio-console; then failures=1; fi
     if ! stop_one mlflow; then failures=1; fi
     if ! stop_one redis; then failures=1; fi
+    if ! stop_one feast; then failures=1; fi
     exit "${failures}"
     ;;
   status)
@@ -172,6 +175,7 @@ case "${ACTION}" in
     status_one minio-console
     status_one mlflow
     status_one redis
+    status_one feast
     ;;
   *)
     echo "usage: $0 {start|stop|status}" >&2
