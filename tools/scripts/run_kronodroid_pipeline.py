@@ -3,17 +3,17 @@
 Kronodroid Data Pipeline Orchestration Script.
 
 This script orchestrates the full data ingestion and transformation pipeline:
-1. Download Kronodroid dataset from Kaggle using dlt
-2. Load raw data into MinIO (or LakeFS for versioning)
-3. Run dbt transformations to create feature tables
-4. Register features with Feast and materialize to online store
+1. Download Kronodroid dataset from Kaggle using dlt → Avro → MinIO
+2. Run dbt-spark transformations → Iceberg tables on LakeFS
+3. Register features with Feast and materialize to online store
+4. Commit changes to LakeFS for version tracking
+
+Data Flow:
+    dlt (Kaggle) → Avro → MinIO → Spark + dbt → Iceberg (LakeFS) → Feast
 
 Usage:
-    # Full pipeline with MinIO
-    python run_kronodroid_pipeline.py --destination minio
-
-    # Full pipeline with LakeFS versioning
-    python run_kronodroid_pipeline.py --destination lakefs --branch dev
+    # Full pipeline
+    python run_kronodroid_pipeline.py
 
     # Skip ingestion (only run dbt + feast)
     python run_kronodroid_pipeline.py --skip-ingestion
@@ -48,59 +48,63 @@ def load_env_file(env_path: Path = PROJECT_ROOT / ".env"):
                 os.environ.setdefault(key.strip(), value.strip())
 
 
-def run_dlt_ingestion(destination: str, lakefs_branch: str | None = None) -> bool:
-    """Run dlt pipeline to ingest Kronodroid data from Kaggle.
+def run_dlt_ingestion(file_format: str = "avro") -> bool:
+    """Run dlt pipeline to ingest Kronodroid data from Kaggle to MinIO.
 
     Args:
-        destination: Target destination ('minio' or 'lakefs')
-        lakefs_branch: LakeFS branch name (only for lakefs destination)
+        file_format: Output format (avro recommended for Spark)
 
     Returns:
         True if successful
     """
     print("\n" + "=" * 60)
-    print("Step 1: Running dlt ingestion from Kaggle")
+    print("Step 1: Running dlt ingestion from Kaggle → Avro → MinIO")
     print("=" * 60)
 
     from engines.dlt_engine.dfp_dlt import run_kronodroid_pipeline
 
     try:
         pipeline = run_kronodroid_pipeline(
-            destination=destination,
-            lakefs_branch=lakefs_branch,
+            destination="minio",
+            dataset_name="kronodroid_raw",
+            file_format=file_format,
         )
-        print(f"dlt pipeline completed successfully")
+        print("dlt pipeline completed successfully")
         print(f"  - Dataset: {pipeline.dataset_name}")
-        print(f"  - Destination: {destination}")
+        print(f"  - Format: {file_format}")
+        print(f"  - Destination: MinIO")
         return True
     except Exception as e:
         print(f"ERROR: dlt ingestion failed: {e}")
+        import traceback
+
+        traceback.print_exc()
         return False
 
 
-def run_dbt_transformations(target: str = "dev") -> bool:
-    """Run dbt transformations to build feature tables.
+def run_dbt_spark_transformations(target: str = "dev") -> bool:
+    """Run dbt-spark transformations to build Iceberg feature tables.
 
     Args:
-        target: dbt target profile to use
+        target: dbt target profile to use (dev or thrift)
 
     Returns:
         True if successful
     """
     print("\n" + "=" * 60)
-    print("Step 2: Running dbt transformations")
+    print("Step 2: Running dbt-spark transformations → Iceberg tables")
     print("=" * 60)
 
     dbt_project_dir = PROJECT_ROOT / "analytics" / "dbt"
-    dbt_data_dir = dbt_project_dir / "data"
-    dbt_data_dir.mkdir(parents=True, exist_ok=True)
 
     # Set DBT_PROFILES_DIR to use project profiles
     profiles_dir = dbt_project_dir / "profiles"
     os.environ["DBT_PROFILES_DIR"] = str(profiles_dir)
 
-    # Set absolute path for DuckDB database
-    os.environ["DBT_DUCKDB_PATH"] = str(dbt_data_dir / f"dbt_{target}.duckdb")
+    # Set LakeFS warehouse path
+    lakefs_repo = os.getenv("LAKEFS_REPOSITORY", "kronodroid")
+    lakefs_branch = os.getenv("LAKEFS_BRANCH", "main")
+    os.environ["LAKEFS_WAREHOUSE"] = f"s3a://{lakefs_repo}/{lakefs_branch}/iceberg"
 
     try:
         # Run dbt deps first
@@ -123,7 +127,9 @@ def run_dbt_transformations(target: str = "dev") -> bool:
         )
         print(result.stdout)
 
-        print("dbt transformations completed successfully")
+        print("dbt-spark transformations completed successfully")
+        print(f"  - Iceberg catalog: lakefs_catalog")
+        print(f"  - Database: dfp")
         return True
 
     except subprocess.CalledProcessError as e:
@@ -132,7 +138,7 @@ def run_dbt_transformations(target: str = "dev") -> bool:
         print(f"stderr: {e.stderr}")
         return False
     except FileNotFoundError:
-        print("ERROR: dbt command not found. Install with: pip install dbt-core dbt-duckdb")
+        print("ERROR: dbt command not found. Install with: pip install dbt-spark[session]")
         return False
 
 
@@ -162,10 +168,11 @@ def run_feast_apply() -> bool:
 
     except subprocess.CalledProcessError as e:
         print(f"ERROR: feast apply failed: {e}")
+        print(f"stdout: {e.stdout}")
         print(f"stderr: {e.stderr}")
         return False
     except FileNotFoundError:
-        print("ERROR: feast command not found. Install with: pip install feast")
+        print("ERROR: feast command not found. Install with: pip install feast[spark]")
         return False
 
 
@@ -210,7 +217,7 @@ def run_feast_materialize(days_back: int = 30) -> bool:
 
 
 def commit_to_lakefs(branch: str, message: str) -> bool:
-    """Commit changes to LakeFS.
+    """Commit Iceberg table changes to LakeFS.
 
     Args:
         branch: LakeFS branch to commit to
@@ -220,34 +227,26 @@ def commit_to_lakefs(branch: str, message: str) -> bool:
         True if successful
     """
     print("\n" + "=" * 60)
-    print(f"Committing changes to LakeFS branch: {branch}")
+    print(f"Step 5: Committing Iceberg changes to LakeFS branch: {branch}")
     print("=" * 60)
 
-    from core.dfp_core.lakefs_client_utils import (
-        LakeFSConfig,
-        commit_changes,
-        get_lakefs_client,
+    from engines.spark_engine.dfp_spark.iceberg_catalog import commit_iceberg_changes
+
+    commit_id = commit_iceberg_changes(
+        branch=branch,
+        message=message,
+        metadata={
+            "pipeline": "kronodroid",
+            "timestamp": datetime.now().isoformat(),
+            "tables": ["fct_training_dataset", "fct_malware_samples", "dim_malware_families"],
+        },
     )
 
-    try:
-        config = LakeFSConfig.from_env()
-        client = get_lakefs_client(config)
-
-        commit_id = commit_changes(
-            client,
-            config.repository,
-            branch,
-            message,
-            metadata={
-                "pipeline": "kronodroid",
-                "timestamp": datetime.now().isoformat(),
-            },
-        )
+    if commit_id:
         print(f"Committed to LakeFS: {commit_id}")
         return True
-
-    except Exception as e:
-        print(f"WARNING: LakeFS commit failed: {e}")
+    else:
+        print("WARNING: LakeFS commit failed or no changes to commit")
         return False
 
 
@@ -258,20 +257,14 @@ def main():
         epilog=__doc__,
     )
     parser.add_argument(
-        "--destination",
-        choices=["minio", "lakefs"],
-        default="minio",
-        help="Data destination (default: minio)",
-    )
-    parser.add_argument(
         "--branch",
         default="main",
-        help="LakeFS branch (only for lakefs destination)",
+        help="LakeFS branch for Iceberg tables (default: main)",
     )
     parser.add_argument(
         "--dbt-target",
         default="dev",
-        help="dbt target profile (default: dev)",
+        help="dbt target profile: dev (embedded Spark) or thrift (Spark server)",
     )
     parser.add_argument(
         "--skip-ingestion",
@@ -289,6 +282,16 @@ def main():
         help="Skip Feast apply step",
     )
     parser.add_argument(
+        "--skip-materialize",
+        action="store_true",
+        help="Skip Feast materialize step",
+    )
+    parser.add_argument(
+        "--skip-commit",
+        action="store_true",
+        help="Skip LakeFS commit step",
+    )
+    parser.add_argument(
         "--materialize-only",
         action="store_true",
         help="Only run feast materialize",
@@ -299,40 +302,45 @@ def main():
         default=30,
         help="Days of features to materialize (default: 30)",
     )
+    parser.add_argument(
+        "--file-format",
+        choices=["avro", "parquet"],
+        default="avro",
+        help="Raw data format from dlt (default: avro)",
+    )
 
     args = parser.parse_args()
 
     # Load environment variables
     load_env_file()
 
-    # Auto-select dbt target based on destination if not explicitly set
-    dbt_target = args.dbt_target
-    if dbt_target == "dev" and args.destination == "lakefs":
-        dbt_target = "lakefs"
+    # Set LakeFS branch in environment for all components
+    os.environ["LAKEFS_BRANCH"] = args.branch
 
     print("=" * 60)
-    print("Kronodroid Data Pipeline")
+    print("Kronodroid Data Pipeline (Spark + Iceberg + LakeFS)")
     print("=" * 60)
-    print(f"  Destination: {args.destination}")
-    if args.destination == "lakefs":
-        print(f"  Branch: {args.branch}")
-    print(f"  dbt target: {dbt_target}")
+    print(f"  LakeFS branch: {args.branch}")
+    print(f"  dbt target: {args.dbt_target}")
+    print(f"  Raw format: {args.file_format}")
+    print("")
+    print("  Flow: Kaggle → dlt → Avro → MinIO → Spark → Iceberg → LakeFS → Feast")
 
     success = True
 
     if args.materialize_only:
         success = run_feast_materialize(args.materialize_days)
     else:
-        # Step 1: dlt ingestion
+        # Step 1: dlt ingestion to MinIO (Avro format)
         if not args.skip_ingestion:
-            if not run_dlt_ingestion(args.destination, args.branch):
+            if not run_dlt_ingestion(file_format=args.file_format):
                 success = False
                 print("\nPipeline failed at dlt ingestion step")
                 sys.exit(1)
 
-        # Step 2: dbt transformations
+        # Step 2: dbt-spark transformations → Iceberg tables
         if not args.skip_dbt:
-            if not run_dbt_transformations(dbt_target):
+            if not run_dbt_spark_transformations(args.dbt_target):
                 success = False
                 print("\nPipeline failed at dbt transformation step")
                 sys.exit(1)
@@ -345,19 +353,25 @@ def main():
                 sys.exit(1)
 
         # Step 4: Materialize features
-        if not run_feast_materialize(args.materialize_days):
-            print("\nWARNING: Feature materialization failed (online store may be unavailable)")
+        if not args.skip_materialize:
+            if not run_feast_materialize(args.materialize_days):
+                print("\nWARNING: Feature materialization failed (online store may be unavailable)")
 
-        # Step 5: Commit to LakeFS (if using lakefs)
-        if args.destination == "lakefs":
+        # Step 5: Commit to LakeFS
+        if not args.skip_commit:
             commit_to_lakefs(
                 args.branch,
-                f"Pipeline run: {datetime.now().isoformat()}",
+                f"Pipeline run: Iceberg tables updated {datetime.now().isoformat()}",
             )
 
     print("\n" + "=" * 60)
     if success:
         print("Pipeline completed successfully!")
+        print("")
+        print("Iceberg tables written to LakeFS:")
+        print(f"  - lakefs_catalog.dfp.fct_training_dataset")
+        print(f"  - lakefs_catalog.dfp.fct_malware_samples")
+        print(f"  - lakefs_catalog.dfp.dim_malware_families")
     else:
         print("Pipeline completed with warnings")
     print("=" * 60)

@@ -1,34 +1,72 @@
-"""Feast feature views for Kronodroid Android malware detection."""
+"""Feast feature views for Kronodroid Android malware detection.
 
+Data Flow:
+    dlt (Kaggle) → Avro → MinIO → Spark → Iceberg (LakeFS) → Feast
+
+The feature sources read from Iceberg tables on LakeFS via SparkSource.
+dbt-spark writes Iceberg tables that Feast consumes for feature serving.
+"""
+
+import os
 from datetime import timedelta
+
+import pandas as pd
 
 from feast import (
     BatchFeatureView,
-    Entity,
     Field,
     FeatureView,
-    FileSource,
     PushSource,
 )
+from feast.infra.offline_stores.contrib.spark_offline_store.spark_source import (
+    SparkSource,
+)
 from feast.on_demand_feature_view import on_demand_feature_view
-from feast.types import Float32, Float64, Int64, String
+from feast.types import Float64, Int64, String
 
-from .entities import malware_family, malware_sample
+from .entities import malware_sample
 
-# File source for training dataset (from dbt mart)
-kronodroid_training_source = FileSource(
+# Configuration from environment
+LAKEFS_REPO = os.getenv("LAKEFS_REPOSITORY", "kronodroid")
+LAKEFS_BRANCH = os.getenv("LAKEFS_BRANCH", "main")
+ICEBERG_CATALOG = os.getenv("ICEBERG_CATALOG", "lakefs_catalog")
+ICEBERG_DATABASE = os.getenv("ICEBERG_DATABASE", "dfp")
+
+
+def get_iceberg_table_name(table: str) -> str:
+    """Get fully qualified Iceberg table name.
+
+    Args:
+        table: Table name
+
+    Returns:
+        Fully qualified table name (catalog.database.table)
+    """
+    return f"{ICEBERG_CATALOG}.{ICEBERG_DATABASE}.{table}"
+
+
+# SparkSource for training dataset (Iceberg table from dbt)
+kronodroid_training_source = SparkSource(
     name="kronodroid_training_source",
-    path="s3://dlt-data/kronodroid/fct_training_dataset/*.parquet",
+    table=get_iceberg_table_name("fct_training_dataset"),
     timestamp_field="event_timestamp",
-    s3_endpoint_override="http://localhost:19000",
+    description="Training dataset from dbt mart (Iceberg table on LakeFS)",
 )
 
-# File source for family statistics
-kronodroid_family_source = FileSource(
-    name="kronodroid_family_source",
-    path="s3://dlt-data/kronodroid/dim_malware_families/*.parquet",
+# SparkSource for malware samples fact table
+kronodroid_samples_source = SparkSource(
+    name="kronodroid_samples_source",
+    table=get_iceberg_table_name("fct_malware_samples"),
+    timestamp_field="event_timestamp",
+    description="Malware samples from dbt mart (Iceberg table on LakeFS)",
+)
+
+# SparkSource for category statistics
+kronodroid_categories_source = SparkSource(
+    name="kronodroid_categories_source",
+    table=get_iceberg_table_name("dim_malware_families"),
     timestamp_field="_dbt_loaded_at",
-    s3_endpoint_override="http://localhost:19000",
+    description="Malware family statistics (Iceberg table on LakeFS)",
 )
 
 # Push source for real-time feature updates
@@ -39,67 +77,36 @@ kronodroid_push_source = PushSource(
 
 
 # Main feature view for malware sample features
+# Schema matches fct_training_dataset output from dbt
 malware_sample_features = FeatureView(
     name="malware_sample_features",
     entities=[malware_sample],
     ttl=timedelta(days=365),  # Features valid for 1 year
     schema=[
-        # Target and metadata
-        Field(name="label", dtype=Int64, description="1=malware, 0=benign"),
-        Field(name="malware_family", dtype=String),
-        Field(name="first_seen_year", dtype=Int64),
+        # Core identifiers and labels
+        Field(name="app_package", dtype=String, description="Android app package name"),
+        Field(name="is_malware", dtype=Int64, description="1=malware, 0=benign"),
         Field(name="data_source", dtype=String, description="emulator or real_device"),
         Field(name="dataset_split", dtype=String, description="train/validation/test"),
-        # Syscall features (dynamic features)
-        Field(name="syscall_1_normalized", dtype=Float32),
-        Field(name="syscall_2_normalized", dtype=Float32),
-        Field(name="syscall_3_normalized", dtype=Float32),
-        Field(name="syscall_4_normalized", dtype=Float32),
-        Field(name="syscall_5_normalized", dtype=Float32),
-        Field(name="syscall_6_normalized", dtype=Float32),
-        Field(name="syscall_7_normalized", dtype=Float32),
-        Field(name="syscall_8_normalized", dtype=Float32),
-        Field(name="syscall_9_normalized", dtype=Float32),
-        Field(name="syscall_10_normalized", dtype=Float32),
-        Field(name="syscall_11_normalized", dtype=Float32),
-        Field(name="syscall_12_normalized", dtype=Float32),
-        Field(name="syscall_13_normalized", dtype=Float32),
-        Field(name="syscall_14_normalized", dtype=Float32),
-        Field(name="syscall_15_normalized", dtype=Float32),
-        Field(name="syscall_16_normalized", dtype=Float32),
-        Field(name="syscall_17_normalized", dtype=Float32),
-        Field(name="syscall_18_normalized", dtype=Float32),
-        Field(name="syscall_19_normalized", dtype=Float32),
-        Field(name="syscall_20_normalized", dtype=Float32),
-        # Aggregated features
-        Field(name="syscall_total", dtype=Float64, description="Sum of all syscalls"),
-        Field(name="syscall_mean", dtype=Float64, description="Mean of syscalls"),
     ],
     source=kronodroid_training_source,
     online=True,
-    tags={"team": "dfp", "dataset": "kronodroid"},
+    tags={"team": "dfp", "dataset": "kronodroid", "storage": "iceberg"},
 )
 
 
-# Family statistics feature view
-malware_family_features = FeatureView(
-    name="malware_family_features",
-    entities=[malware_family],
-    ttl=timedelta(days=30),
+# Batch feature view for offline training (subset of features)
+malware_batch_features = BatchFeatureView(
+    name="malware_batch_features",
+    entities=[malware_sample],
+    ttl=timedelta(days=365),
     schema=[
-        Field(name="family_name", dtype=String),
-        Field(name="is_malware_family", dtype=Int64),
-        Field(name="total_samples", dtype=Int64),
-        Field(name="unique_samples", dtype=Int64),
-        Field(name="emulator_count", dtype=Int64),
-        Field(name="real_device_count", dtype=Int64),
-        Field(name="earliest_year", dtype=Int64),
-        Field(name="latest_year", dtype=Int64),
-        Field(name="year_span", dtype=Int64),
+        Field(name="is_malware", dtype=Int64, description="Target label"),
+        Field(name="data_source", dtype=String),
+        Field(name="dataset_split", dtype=String),
     ],
-    source=kronodroid_family_source,
-    online=True,
-    tags={"team": "dfp", "dataset": "kronodroid"},
+    source=kronodroid_training_source,
+    tags={"team": "dfp", "dataset": "kronodroid", "usage": "training", "storage": "iceberg"},
 )
 
 
@@ -107,44 +114,11 @@ malware_family_features = FeatureView(
 @on_demand_feature_view(
     sources=[malware_sample_features],
     schema=[
-        Field(name="syscall_variance", dtype=Float64),
-        Field(name="is_high_activity", dtype=Int64),
+        Field(name="is_emulator_sample", dtype=Int64),
     ],
 )
-def malware_derived_features(inputs: dict) -> dict:
+def malware_derived_features(inputs: pd.DataFrame) -> pd.DataFrame:
     """Compute derived features from base malware sample features."""
-    import numpy as np
-
-    syscalls = [
-        inputs[f"syscall_{i}_normalized"]
-        for i in range(1, 21)
-        if f"syscall_{i}_normalized" in inputs
-    ]
-
-    if syscalls:
-        variance = float(np.var(syscalls))
-        total = float(np.sum(syscalls))
-        is_high = 1 if total > 100 else 0
-    else:
-        variance = 0.0
-        is_high = 0
-
-    return {
-        "syscall_variance": variance,
-        "is_high_activity": is_high,
-    }
-
-
-# Batch feature view for offline training
-malware_batch_features = BatchFeatureView(
-    name="malware_batch_features",
-    entities=[malware_sample],
-    ttl=timedelta(days=365),
-    schema=[
-        Field(name="label", dtype=Int64),
-        Field(name="syscall_total", dtype=Float64),
-        Field(name="syscall_mean", dtype=Float64),
-    ],
-    source=kronodroid_training_source,
-    tags={"team": "dfp", "dataset": "kronodroid", "usage": "training"},
-)
+    df = pd.DataFrame()
+    df["is_emulator_sample"] = (inputs["data_source"] == "emulator").astype(int)
+    return df

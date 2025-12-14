@@ -1,7 +1,8 @@
 {{
     config(
         materialized='table',
-        tags=['staging', 'kronodroid']
+        tags=['staging', 'kronodroid'],
+        file_format='iceberg'
     )
 }}
 
@@ -9,27 +10,43 @@
     Combined staging model for Kronodroid data.
 
     Unions emulator and real device data with a unique sample_id.
-    The sample_id is generated from hash + data_source to handle
-    cases where the same APK appears in both datasets.
+    Uses standard UNION ALL (Spark compatible) instead of DuckDB's UNION ALL BY NAME.
+    
+    The sample_id is generated from _row_id + data_source for uniqueness.
 #}
 
 with emulator as (
-    select * from {{ ref('stg_kronodroid__emulator') }}
+    select 
+        _row_id,
+        app_package,
+        is_malware,
+        data_source,
+        _dbt_loaded_at
+    from {{ ref('stg_kronodroid__emulator') }}
 ),
 
 real_device as (
-    select * from {{ ref('stg_kronodroid__real_device') }}
+    select 
+        _row_id,
+        app_package,
+        is_malware,
+        data_source,
+        _dbt_loaded_at
+    from {{ ref('stg_kronodroid__real_device') }}
 ),
 
 combined as (
+    -- Standard UNION ALL (columns must match exactly)
     select * from emulator
     union all
     select * from real_device
 )
 
 select
-    *,
-    -- Generate a unique ID combining row number and source
-    -- (hash column name varies by dataset version)
-    row_number() over (order by data_source, _ingestion_timestamp) as sample_id
+    -- Generate unique sample ID by combining row ID and data source
+    CONCAT(_row_id, '_', data_source) as sample_id,
+    app_package,
+    is_malware,
+    data_source,
+    _dbt_loaded_at
 from combined

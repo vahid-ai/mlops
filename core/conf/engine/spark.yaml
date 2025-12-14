@@ -1,2 +1,40 @@
-catalog: lakefs
-warehouse: s3a://warehouse
+# Spark engine configuration for Iceberg + LakeFS
+# Used by dfp_spark.session.get_spark_session()
+
+# Iceberg catalog configuration
+catalog: lakefs_catalog
+warehouse: s3a://${LAKEFS_REPOSITORY:kronodroid}/${LAKEFS_BRANCH:main}/iceberg
+
+# Iceberg table format settings
+iceberg:
+  write_format: avro
+  compression: snappy
+  target_file_size_bytes: 134217728  # 128MB
+
+# LakeFS connection (S3A compatible)
+lakefs:
+  endpoint: ${LAKEFS_ENDPOINT_URL:http://localhost:8000}
+  access_key: ${LAKEFS_ACCESS_KEY_ID}
+  secret_key: ${LAKEFS_SECRET_ACCESS_KEY}
+  repository: ${LAKEFS_REPOSITORY:kronodroid}
+  branch: ${LAKEFS_BRANCH:main}
+
+# MinIO connection (for raw data)
+minio:
+  endpoint: ${MINIO_ENDPOINT_URL:http://localhost:19000}
+  access_key: ${MINIO_ACCESS_KEY_ID:minioadmin}
+  secret_key: ${MINIO_SECRET_ACCESS_KEY:minioadmin}
+  bucket: ${MINIO_BUCKET_NAME:dlt-data}
+
+# Spark resource settings
+spark:
+  driver_memory: 2g
+  executor_memory: 2g
+  executor_cores: 2
+  dynamic_allocation: false
+
+# Packages to include
+packages:
+  - org.apache.iceberg:iceberg-spark-runtime-3.5_2.12:1.5.0
+  - org.apache.iceberg:iceberg-aws-bundle:1.5.0
+  - org.apache.spark:spark-avro_2.12:3.5.0

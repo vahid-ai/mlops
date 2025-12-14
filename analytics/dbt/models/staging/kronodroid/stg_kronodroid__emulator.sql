@@ -1,32 +1,42 @@
 {{
     config(
-        materialized='view',
-        tags=['staging', 'kronodroid']
+        materialized='table',
+        tags=['staging', 'kronodroid'],
+        file_format='iceberg'
     )
 }}
 
 {#
     Staging model for Kronodroid emulator data.
 
-    The KronoDroid dataset contains 289 dynamic features (system calls) and
-    200 static features. This model selects all columns and adds standardized
-    metadata columns.
-
-    Since column names may vary between dataset versions, we use SELECT *
-    and add our metadata columns.
+    Reads Avro data from MinIO (ingested by dlt from Kaggle).
+    The dataset contains ~300 columns with syscall counts and a malware label.
+    
+    Note: Uses Spark SQL syntax (no DuckDB-specific features).
 #}
 
 with source as (
-    select * from {{ source('kronodroid_raw', 'emulator') }}
+    select 
+        *,
+        -- Generate unique row ID
+        CAST(uuid() AS STRING) as _row_id
+    from {{ read_kronodroid_emulator() }}
 ),
 
 cleaned as (
     select
-        *,
-        -- Data source indicator
+        _row_id,
+        
+        -- App identifier (rename package to app_package)
+        package as app_package,
+
+        -- Target label (ensure integer type)
+        CAST(malware AS INT) as is_malware,
+
+        -- Metadata
         'emulator' as data_source,
-        -- Standardized timestamp
-        current_timestamp as _dbt_loaded_at
+        current_timestamp() as _dbt_loaded_at
+
     from source
 )
 

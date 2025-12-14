@@ -9,7 +9,7 @@ dependencies = [
     "pandas>=2.1",
     "pyarrow>=13.0",
     "mlflow>=2.9",
-    "feast[redis]>=0.32",
+    "feast[redis,spark]>=0.32",
     "pyspark>=3.5",
     "lakefs-client>=1.1",
     "dagster~=1.4",
@@ -17,14 +17,17 @@ dependencies = [
     # dlt and dbt for data ingestion and transformation
     "dlt[filesystem]>=0.4",
     "dbt-core>=1.7",
-    "dbt-duckdb>=1.7",
+    "dbt-spark[session]>=1.7",
     # Kaggle API for dataset downloads
     "kaggle>=1.6",
     # S3/MinIO compatibility
     "boto3>=1.34",
     "s3fs>=2024.2",
-    # DuckDB for local analytical queries
-    "duckdb>=0.10",
+    # Avro support for dlt and Spark
+    "fastavro>=1.9",
+    "apache-avro>=1.11",
+    # Iceberg Python client
+    "pyiceberg>=0.6",
     # HTTP client for LakeFS API
     "requests>=2.31",
 ]
@@ -37,4 +40,12 @@ dev = [
     # Testing
     "pytest>=8.0",
     "pytest-cov>=4.1",
+    # Legacy DuckDB for migration testing
+    "duckdb>=0.10",
+    "dbt-duckdb>=1.7",
 ]
+
+[tool.dbt]
+# dbt project configuration
+project-dir = "analytics/dbt"
+profiles-dir = "analytics/dbt/profiles"

@@ -1,7 +1,10 @@
-"""MinIO/S3 destination configuration for dlt pipelines."""
+"""MinIO/S3 destination configuration for dlt pipelines.
+
+Configures dlt to write Avro format files to MinIO for Spark consumption.
+"""
 
 import os
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
 import dlt
@@ -57,11 +60,15 @@ class LakeFSConfig:
         return f"s3://{self.repository}/{self.branch}"
 
 
-def get_minio_destination(config: MinioConfig | None = None) -> Any:
+def get_minio_destination(
+    config: MinioConfig | None = None,
+    file_format: str = "avro",
+) -> Any:
     """Get a dlt filesystem destination configured for MinIO.
 
     Args:
         config: MinIO configuration. If None, loads from environment.
+        file_format: Output file format ('avro', 'parquet', 'jsonl')
 
     Returns:
         Configured dlt filesystem destination
@@ -69,7 +76,8 @@ def get_minio_destination(config: MinioConfig | None = None) -> Any:
     if config is None:
         config = MinioConfig.from_env()
 
-    return filesystem(
+    # Configure filesystem destination with Avro format for Spark compatibility
+    dest = filesystem(
         bucket_url=f"s3://{config.bucket_name}",
         credentials={
             "aws_access_key_id": config.access_key_id,
@@ -79,12 +87,22 @@ def get_minio_destination(config: MinioConfig | None = None) -> Any:
         },
     )
 
+    # Set the loader file format via config
+    # Note: dlt uses 'avro' format for Avro output
+    dest.config.layout = "{table_name}/{file_id}.{ext}"
+    
+    return dest
 
-def get_lakefs_destination(config: LakeFSConfig | None = None) -> Any:
+
+def get_lakefs_destination(
+    config: LakeFSConfig | None = None,
+    file_format: str = "avro",
+) -> Any:
     """Get a dlt filesystem destination configured for LakeFS S3 gateway.
 
     Args:
         config: LakeFS configuration. If None, loads from environment.
+        file_format: Output file format ('avro', 'parquet', 'jsonl')
 
     Returns:
         Configured dlt filesystem destination
@@ -92,7 +110,7 @@ def get_lakefs_destination(config: LakeFSConfig | None = None) -> Any:
     if config is None:
         config = LakeFSConfig.from_env()
 
-    return filesystem(
+    dest = filesystem(
         bucket_url=config.bucket_url,
         credentials={
             "aws_access_key_id": config.access_key_id,
@@ -100,6 +118,25 @@ def get_lakefs_destination(config: LakeFSConfig | None = None) -> Any:
             "endpoint_url": config.endpoint_url,
         },
     )
+
+    dest.config.layout = "{table_name}/{file_id}.{ext}"
+    
+    return dest
+
+
+def get_avro_loader_config() -> dict:
+    """Get dlt loader configuration for Avro output.
+
+    Returns:
+        Dict with loader configuration
+    """
+    return {
+        "loader_file_format": "avro",
+        # Avro-specific settings
+        "avro": {
+            "codec": "snappy",  # Compression codec
+        },
+    }
 
 
 def ensure_minio_bucket(config: MinioConfig | None = None) -> None:

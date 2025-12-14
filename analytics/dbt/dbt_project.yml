@@ -12,14 +12,21 @@ clean-targets:
   - "dbt_packages"
 
 vars:
-  # MinIO/S3 bucket for raw data
-  raw_bucket: "{{ env_var('MINIO_BUCKET_NAME', 'dlt-data') }}"
-  # LakeFS repository for versioned data
+  # LakeFS repository for versioned Iceberg tables
   lakefs_repo: "{{ env_var('LAKEFS_REPOSITORY', 'kronodroid') }}"
   lakefs_branch: "{{ env_var('LAKEFS_BRANCH', 'main') }}"
+  # Iceberg catalog name (must match profiles.yml)
+  iceberg_catalog: "lakefs_catalog"
+  iceberg_database: "dfp"
+  # MinIO bucket for raw Avro data (from dlt)
+  raw_bucket: "{{ env_var('MINIO_BUCKET_NAME', 'dlt-data') }}"
+  raw_dataset: "kronodroid_raw"
 
 models:
   dfp_analytics:
+    # Global configuration for all models
+    +file_format: iceberg
+    +incremental_strategy: merge
     staging:
       +materialized: view
       +tags: ["staging"]
@@ -30,3 +37,5 @@ models:
       +tags: ["mart"]
       kronodroid:
         +schema: kronodroid
+        # Mart tables are Iceberg tables with Avro storage
+        +file_format: iceberg
