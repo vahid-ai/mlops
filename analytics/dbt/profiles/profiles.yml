@@ -1,0 +1,47 @@
+# dbt profiles for dfp_analytics project
+# Copy this to ~/.dbt/profiles.yml or set DBT_PROFILES_DIR env var
+
+dfp:
+  target: dev
+  outputs:
+    # Local development with DuckDB + MinIO
+    dev:
+      type: duckdb
+      path: "{{ env_var('DBT_DUCKDB_PATH', 'data/dbt.duckdb') }}"
+      extensions:
+        - httpfs
+        - parquet
+      settings:
+        s3_region: "{{ env_var('MINIO_REGION', 'us-east-1') }}"
+        s3_endpoint: "{{ env_var('MINIO_ENDPOINT_URL', 'localhost:19000') }}"
+        s3_access_key_id: "{{ env_var('MINIO_ACCESS_KEY_ID', 'minioadmin') }}"
+        s3_secret_access_key: "{{ env_var('MINIO_SECRET_ACCESS_KEY', 'minioadmin') }}"
+        s3_use_ssl: false
+        s3_url_style: path
+
+    # LakeFS-backed development (uses LakeFS S3 gateway)
+    lakefs:
+      type: duckdb
+      path: "{{ env_var('DBT_DUCKDB_PATH', 'data/dbt_lakefs.duckdb') }}"
+      extensions:
+        - httpfs
+        - parquet
+      settings:
+        s3_region: "us-east-1"
+        s3_endpoint: "{{ env_var('LAKEFS_ENDPOINT_URL', 'localhost:8000') }}"
+        s3_access_key_id: "{{ env_var('LAKEFS_ACCESS_KEY_ID') }}"
+        s3_secret_access_key: "{{ env_var('LAKEFS_SECRET_ACCESS_KEY') }}"
+        s3_use_ssl: false
+        s3_url_style: path
+
+    # Production with managed data warehouse
+    prod:
+      type: duckdb
+      path: "{{ env_var('DBT_PROD_PATH', '/data/dbt_prod.duckdb') }}"
+      extensions:
+        - httpfs
+        - parquet
+      settings:
+        s3_region: "{{ env_var('AWS_REGION', 'us-east-1') }}"
+        s3_access_key_id: "{{ env_var('AWS_ACCESS_KEY_ID') }}"
+        s3_secret_access_key: "{{ env_var('AWS_SECRET_ACCESS_KEY') }}"

@@ -1,0 +1,8 @@
+# Optional: Bazelify dlt engine
+# This is a placeholder for Bazel build rules
+
+py_library(
+    name = "dfp_dlt",
+    srcs = glob(["dfp_dlt/**/*.py"]),
+    visibility = ["//visibility:public"],
+)

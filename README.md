@@ -39,6 +39,44 @@ See inline README stubs and doc files under `docs/` for guidance on how each pac
   - Redis: `127.0.0.1:16379` (use `redis-cli -h 127.0.0.1 -p 16379 ping`)
 - For cloud, reuse the same manifests with overlays to swap NodePort → LoadBalancer/Ingress and point LakeFS/MLflow at managed object storage + Postgres.
 
+## Kronodroid Data Pipeline
+
+The Kronodroid Android malware detection dataset can be ingested from Kaggle and processed through the dlt + dbt + Feast pipeline.
+
+### Prerequisites
+1. Start the kind cluster with `task up`
+2. Ensure you have a Kaggle API token in `.env` as `KAGGLE_API_TOKEN`
+3. Install Python dependencies: `uv pip install -e .`
+
+### Running the Pipeline
+
+```bash
+# Full pipeline: Kaggle → MinIO → dbt → Feast
+python tools/scripts/run_kronodroid_pipeline.py --destination minio
+
+# With LakeFS versioning
+python tools/scripts/run_kronodroid_pipeline.py --destination lakefs --branch dev
+
+# Skip ingestion (if data already loaded)
+python tools/scripts/run_kronodroid_pipeline.py --skip-ingestion
+
+# Only materialize features to Redis
+python tools/scripts/run_kronodroid_pipeline.py --materialize-only
+```
+
+### Pipeline Components
+
+1. **dlt Engine** (`engines/dlt_engine/dfp_dlt/`): Downloads Kronodroid from Kaggle and loads to MinIO/LakeFS
+2. **dbt Models** (`analytics/dbt/models/*/kronodroid/`): Transforms raw data into feature tables
+3. **Feast Features** (`feature_stores/feast_store/dfp_feast/kronodroid_features.py`): Feature definitions for ML
+
+### Data Flow
+```
+Kaggle API → dlt → MinIO (raw) → dbt → MinIO (transformed) → Feast → Redis (online)
+                     ↓                        ↓
+                  LakeFS (versioning)    LakeFS (versioning)
+```
+
 ## Tests and CI
 - Tests live in `tests/` (unit, integration, e2e). Run with `pytest` after replacing placeholders.
 - GitHub Actions workflows in `ci/github/workflows` cover lint, build/test, and KFP compile; Tekton and Dagger stubs also provided.

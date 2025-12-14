@@ -2,3 +2,31 @@ name: dfp_analytics
 version: '1.0'
 profile: dfp
 model-paths: ["models"]
+test-paths: ["tests"]
+macro-paths: ["macros"]
+seed-paths: ["seeds"]
+analysis-paths: ["analysis"]
+target-path: "target"
+clean-targets:
+  - "target"
+  - "dbt_packages"
+
+vars:
+  # MinIO/S3 bucket for raw data
+  raw_bucket: "{{ env_var('MINIO_BUCKET_NAME', 'dlt-data') }}"
+  # LakeFS repository for versioned data
+  lakefs_repo: "{{ env_var('LAKEFS_REPOSITORY', 'kronodroid') }}"
+  lakefs_branch: "{{ env_var('LAKEFS_BRANCH', 'main') }}"
+
+models:
+  dfp_analytics:
+    staging:
+      +materialized: view
+      +tags: ["staging"]
+      kronodroid:
+        +schema: stg_kronodroid
+    marts:
+      +materialized: table
+      +tags: ["mart"]
+      kronodroid:
+        +schema: kronodroid

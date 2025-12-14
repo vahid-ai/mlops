@@ -1,0 +1,35 @@
+# Kronodroid Android malware dataset configuration
+
+# Data source
+source:
+  type: kaggle
+  dataset: dhoogla/kronodroid-2021
+  format: csv
+
+# LakeFS versioning
+lakefs_repo: ${oc.env:LAKEFS_REPOSITORY,kronodroid}
+branch: ${oc.env:LAKEFS_BRANCH,main}
+
+# Storage paths
+storage:
+  raw_bucket: ${oc.env:MINIO_BUCKET_NAME,dlt-data}
+  raw_prefix: kronodroid_raw
+  transformed_prefix: kronodroid
+
+# Data tables
+tables:
+  training: fct_training_dataset
+  samples: fct_malware_samples
+  families: dim_malware_families
+
+# Split configuration
+splits:
+  train_ratio: 0.70
+  validation_ratio: 0.15
+  test_ratio: 0.15
+
+# Feature configuration
+features:
+  dynamic_features: 289  # System call features
+  static_features: 200   # Permissions, intents, metadata
+  total_features: 489

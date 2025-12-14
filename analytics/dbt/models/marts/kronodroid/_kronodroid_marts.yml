@@ -1,0 +1,51 @@
+version: 2
+
+models:
+  - name: fct_malware_samples
+    description: "Fact table containing all malware samples with computed features"
+    columns:
+      - name: sample_id
+        description: "Unique identifier for each sample"
+        tests:
+          - unique
+          - not_null
+      - name: is_malware
+        description: "Target label: 1 for malware, 0 for benign"
+        tests:
+          - not_null
+      - name: event_timestamp
+        description: "Timestamp for Feast feature store"
+        tests:
+          - not_null
+
+  - name: dim_malware_families
+    description: "Dimension table with malware family statistics"
+    columns:
+      - name: family_id
+        description: "Unique identifier for malware family"
+        tests:
+          - unique
+          - not_null
+      - name: is_malware_family
+        description: "Whether this is a malware family (vs benign)"
+        tests:
+          - not_null
+
+  - name: fct_training_dataset
+    description: "Feature-engineered training dataset with reproducible splits"
+    columns:
+      - name: sample_id
+        description: "Unique sample identifier"
+        tests:
+          - unique
+          - not_null
+      - name: label
+        description: "Binary classification target"
+        tests:
+          - not_null
+      - name: dataset_split
+        description: "train/validation/test split assignment"
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['train', 'validation', 'test']

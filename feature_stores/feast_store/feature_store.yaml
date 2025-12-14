@@ -1,6 +1,29 @@
 project: dfp
-registry: data/registry.db
+provider: local
+
+# Registry for feature definitions
+registry:
+  path: data/registry.db
+  cache_ttl_seconds: 60
+
+# Offline store using file-based storage (compatible with MinIO via S3)
 offline_store:
-  type: spark
+  type: file
+
+# Online store using Redis for low-latency serving
 online_store:
   type: redis
+  connection_string: ${REDIS_CONNECTION_STRING:-redis://localhost:16379}
+
+# Entity key serialization
+entity_key_serialization_version: 2
+
+# Feature server configuration
+feature_server:
+  enabled: true
+  type: local
+
+# Flags
+flags:
+  alpha_features: true
+  on_demand_transforms: true

@@ -1,0 +1,38 @@
+version: 2
+
+sources:
+  - name: kronodroid_raw
+    description: "Raw KronoDroid Android malware detection dataset from Kaggle"
+    schema: kronodroid_raw
+    tables:
+      - name: emulator
+        description: "Malware samples collected from Android emulator environment"
+        columns:
+          - name: sha256
+            description: "SHA256 hash of the APK file"
+          - name: label
+            description: "Binary label: 0 for benign, 1 for malware"
+          - name: family
+            description: "Malware family name (null for benign samples)"
+          - name: year
+            description: "Year the sample was first seen"
+          - name: _source_file
+            description: "Original source file name"
+          - name: _ingestion_timestamp
+            description: "Timestamp when data was ingested"
+
+      - name: real_device
+        description: "Malware samples collected from real Android devices"
+        columns:
+          - name: sha256
+            description: "SHA256 hash of the APK file"
+          - name: label
+            description: "Binary label: 0 for benign, 1 for malware"
+          - name: family
+            description: "Malware family name (null for benign samples)"
+          - name: year
+            description: "Year the sample was first seen"
+          - name: _source_file
+            description: "Original source file name"
+          - name: _ingestion_timestamp
+            description: "Timestamp when data was ingested"
