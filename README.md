@@ -20,8 +20,18 @@ See inline README stubs and doc files under `docs/` for guidance on how each pac
 - Runtimes/Android: Bazel targets are placeholders in `runtimes/**` and `apps/android/**`; build with `bazel build //runtimes/executorch:all` or app targets after rules are filled.
 
 ## Kubernetes (kind)
-- Create a local cluster and deploy the data/metadata plane: `tools/scripts/kind_bootstrap.sh` (uses `infra/k8s/kind/kind-config.yaml` and `infra/k8s/kind/manifests`).
-- Services available on host: LakeFS `http://localhost:8000`, MinIO `http://localhost:9000`, MLflow `http://localhost:5000`, Redis `127.0.0.1:6379`.
+- Recommended: install pinned tooling with `mise install`, then run `task up` (wraps `tools/scripts/kind_bootstrap.sh`).
+- Install `mise`:
+  - macOS (Homebrew): `brew install mise`
+  - Linux/macOS (script): `curl https://mise.run | sh`
+  - Windows (winget): `winget install jdx.mise`
+- Install `task` (go-task):
+  - macOS (Homebrew): `brew install go-task/tap/go-task`
+  - Linux/macOS (script): `sh -c "$(curl --location https://taskfile.dev/install.sh)" -- -d -b ~/.local/bin`
+  - Windows: `choco install go-task` (or `scoop install task`)
+- Direct: create a local cluster and deploy the data/metadata plane via `tools/scripts/kind_bootstrap.sh` (uses `infra/k8s/kind/kind-config.yaml` and `infra/k8s/kind/manifests`).
+- `task up` starts port-forwards by default (`PORT_FORWARD=1`); disable with `PORT_FORWARD=0 task up`. You can also run `task port-forward`, `task port-forward:status`, and `task port-forward:stop`.
+- Services available on host: LakeFS `http://localhost:8000`, MinIO `http://localhost:9000`, MLflow `http://localhost:5050`, Redis `127.0.0.1:6379`.
 - For cloud, reuse the same manifests with overlays to swap NodePort → LoadBalancer/Ingress and point LakeFS/MLflow at managed object storage + Postgres.
 
 ## Tests and CI

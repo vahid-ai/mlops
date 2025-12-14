@@ -17,6 +17,10 @@ spec:
         - name: lakefs
           image: treeverse/lakefs:latest
           env:
+            - name: LAKEFS_DATABASE_TYPE
+              value: postgres
+            - name: LAKEFS_DATABASE_POSTGRES_CONNECTION_STRING
+              value: postgres://lakefs:lakefs@lakefs-postgres.dfp.svc.cluster.local:5432/lakefs?sslmode=disable
             - name: LAKEFS_DATABASE_CONNECTION_STRING
               value: postgres://lakefs:lakefs@lakefs-postgres.dfp.svc.cluster.local:5432/lakefs?sslmode=disable
             - name: LAKEFS_AUTH_ENCRYPT_SECRET_KEY

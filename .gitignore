@@ -9,6 +9,12 @@ __pycache__/
 .pytest_cache/
 .mypy_cache/
 
+# Task (go-task)
+.task/
+
+# mise
+.mise.local.toml
+
 # OS/filesystem noise
 .DS_Store
 

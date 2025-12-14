@@ -1,0 +1,92 @@
+version: "3"
+
+vars:
+  CLUSTER_NAME: '{{.CLUSTER_NAME | default "dfp-kind"}}'
+  KIND_CONFIG: '{{.KIND_CONFIG | default "./infra/k8s/kind/kind-config.yaml"}}'
+  KUSTOMIZE_DIR: '{{.KUSTOMIZE_DIR | default "./infra/k8s/kind/manifests"}}'
+  NAMESPACE: '{{.NAMESPACE | default "dfp"}}'
+  PORT_FORWARD: '{{.PORT_FORWARD | default "1"}}'
+
+tasks:
+  tools:
+    desc: Install pinned tooling via mise
+    cmds:
+      - mise install
+
+  up:
+    desc: Create kind cluster and deploy local services
+    cmds:
+      - task: kind:up
+
+  down:
+    desc: Delete kind cluster
+    cmds:
+      - task: kind:down
+
+  status:
+    desc: Show kind cluster and namespace status
+    cmds:
+      - task: kind:status
+
+  logs:
+    desc: Tail logs for a deployment (APP=minio|redis|lakefs|mlflow|lakefs-postgres)
+    vars:
+      APP: '{{.APP | default ""}}'
+    cmds:
+      - task: kind:logs
+        vars:
+          APP: "{{.APP}}"
+
+  port-forward:
+    desc: Port-forward local service endpoints to localhost
+    cmds:
+      - bash ./tools/scripts/kind_portforward.sh start
+
+  port-forward:stop:
+    desc: Stop port-forwards started by this repo
+    cmds:
+      - bash ./tools/scripts/kind_portforward.sh stop
+
+  port-forward:status:
+    desc: Show port-forward status
+    cmds:
+      - bash ./tools/scripts/kind_portforward.sh status
+
+  kind:up:
+    desc: Bootstrap kind + apply kustomize overlay
+    env:
+      CLUSTER_NAME: "{{.CLUSTER_NAME}}"
+      NAMESPACE: "{{.NAMESPACE}}"
+      KIND_CONFIG: "{{.KIND_CONFIG}}"
+      KUSTOMIZE_DIR: "{{.KUSTOMIZE_DIR}}"
+      PORT_FORWARD: "{{.PORT_FORWARD}}"
+    cmds:
+      - bash ./tools/scripts/kind_bootstrap.sh
+
+  kind:down:
+    desc: Delete kind cluster
+    cmds:
+      - kind delete cluster --name "{{.CLUSTER_NAME}}"
+
+  kind:status:
+    desc: Show deployments/pods/services in the dfp namespace
+    cmds:
+      - |
+          if ! kind get clusters | grep -qx "{{.CLUSTER_NAME}}"; then
+            echo "kind cluster '{{.CLUSTER_NAME}}' not found"
+            exit 0
+          fi
+      - kubectl -n "{{.NAMESPACE}}" get deploy,po,svc
+
+  kind:logs:
+    desc: Tail logs for APP (deployment name)
+    vars:
+      APP: '{{.APP | default ""}}'
+    cmds:
+      - |
+          if [ -z "{{.APP}}" ]; then
+            echo "Set APP=... (minio|redis|lakefs|mlflow|lakefs-postgres)"
+            kubectl -n "{{.NAMESPACE}}" get deployments
+            exit 0
+          fi
+      - kubectl -n "{{.NAMESPACE}}" logs deployment/"{{.APP}}" -f --tail=200
