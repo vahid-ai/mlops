@@ -16,7 +16,10 @@ spec:
       containers:
         - name: feature-server
           image: feastdev/feature-server:latest
+          command: ["feast"]
           args:
+            - -f
+            - /feast/feature_store.yaml
             - serve
             - --host
             - 0.0.0.0
@@ -63,4 +66,3 @@ spec:
     - name: http
       port: 6566
       targetPort: 6566
-

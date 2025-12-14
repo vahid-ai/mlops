@@ -21,25 +21,10 @@ data:
       cache_ttl_seconds: 60
 
     offline_store:
-      type: spark
-      spark_conf:
-        spark.sql.extensions: org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions
-        spark.sql.catalog.lakefs_catalog: org.apache.iceberg.spark.SparkCatalog
-        spark.sql.catalog.lakefs_catalog.type: hadoop
-        spark.sql.catalog.lakefs_catalog.warehouse: ${LAKEFS_WAREHOUSE:-s3a://kronodroid/main/iceberg}
-        spark.hadoop.fs.s3a.endpoint: ${LAKEFS_ENDPOINT_URL:-http://lakefs.dfp.svc.cluster.local:8000}
-        spark.hadoop.fs.s3a.access.key: ${LAKEFS_ACCESS_KEY_ID:-}
-        spark.hadoop.fs.s3a.secret.key: ${LAKEFS_SECRET_ACCESS_KEY:-}
-        spark.hadoop.fs.s3a.path.style.access: "true"
-        spark.hadoop.fs.s3a.impl: org.apache.hadoop.fs.s3a.S3AFileSystem
-        spark.hadoop.fs.s3a.connection.ssl.enabled: "false"
-        spark.sql.iceberg.write.format.default: avro
-        spark.driver.memory: 2g
-        spark.executor.memory: 2g
+      type: file
 
     online_store:
       type: redis
       connection_string: ${REDIS_CONNECTION_STRING:-redis://redis.dfp.svc.cluster.local:6379}
 
     entity_key_serialization_version: 3
-
