@@ -9,6 +9,7 @@ from .kaggle_source import kronodroid_source
 from .minio_destination import (
     LakeFSConfig,
     MinioConfig,
+    ensure_lakefs_repository,
     ensure_minio_bucket,
     get_lakefs_destination,
     get_minio_destination,
@@ -43,6 +44,8 @@ def run_kronodroid_pipeline(
         config = LakeFSConfig.from_env()
         if lakefs_branch:
             config.branch = lakefs_branch
+        # Ensure LakeFS repository and branch exist before writing
+        ensure_lakefs_repository(config)
         dest = get_lakefs_destination(config)
         pipeline_name = f"kronodroid_lakefs_{config.branch}"
     else:
@@ -82,24 +85,22 @@ def run_kronodroid_to_parquet(
         Path to the output directory
     """
     import tempfile
-    import zipfile
 
     import pandas as pd
-    from kaggle.api.kaggle_api_extended import KaggleApi
+
+    from .kaggle_compat import patch_kagglesdk_user_agent
 
     output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
 
     if kaggle_token:
-        os.environ["KAGGLE_KEY"] = kaggle_token
-    elif "KAGGLE_API_TOKEN" in os.environ:
-        os.environ["KAGGLE_KEY"] = os.environ["KAGGLE_API_TOKEN"]
+        os.environ["KAGGLE_API_TOKEN"] = kaggle_token
 
-    api = KaggleApi()
-    api.authenticate()
+    patch_kagglesdk_user_agent()
+    import kaggle  # type: ignore[import-not-found]
 
     with tempfile.TemporaryDirectory() as tmpdir:
-        api.dataset_download_files(
+        kaggle.api.dataset_download_files(
             "dhoogla/kronodroid-2021",
             path=tmpdir,
             unzip=True,

@@ -92,10 +92,15 @@ def run_dbt_transformations(target: str = "dev") -> bool:
     print("=" * 60)
 
     dbt_project_dir = PROJECT_ROOT / "analytics" / "dbt"
+    dbt_data_dir = dbt_project_dir / "data"
+    dbt_data_dir.mkdir(parents=True, exist_ok=True)
 
     # Set DBT_PROFILES_DIR to use project profiles
     profiles_dir = dbt_project_dir / "profiles"
     os.environ["DBT_PROFILES_DIR"] = str(profiles_dir)
+
+    # Set absolute path for DuckDB database
+    os.environ["DBT_DUCKDB_PATH"] = str(dbt_data_dir / f"dbt_{target}.duckdb")
 
     try:
         # Run dbt deps first
@@ -300,13 +305,18 @@ def main():
     # Load environment variables
     load_env_file()
 
+    # Auto-select dbt target based on destination if not explicitly set
+    dbt_target = args.dbt_target
+    if dbt_target == "dev" and args.destination == "lakefs":
+        dbt_target = "lakefs"
+
     print("=" * 60)
     print("Kronodroid Data Pipeline")
     print("=" * 60)
     print(f"  Destination: {args.destination}")
     if args.destination == "lakefs":
         print(f"  Branch: {args.branch}")
-    print(f"  dbt target: {args.dbt_target}")
+    print(f"  dbt target: {dbt_target}")
 
     success = True
 
@@ -322,7 +332,7 @@ def main():
 
         # Step 2: dbt transformations
         if not args.skip_dbt:
-            if not run_dbt_transformations(args.dbt_target):
+            if not run_dbt_transformations(dbt_target):
                 success = False
                 print("\nPipeline failed at dbt transformation step")
                 sys.exit(1)

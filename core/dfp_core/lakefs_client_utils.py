@@ -53,21 +53,20 @@ def get_lakefs_client(config: LakeFSConfig | None = None):
         config: LakeFS configuration. If None, loads from environment.
 
     Returns:
-        Configured lakefs_client.Client instance
+        Configured lakefs_client.ApiClient instance
     """
-    import lakefs_client
-    from lakefs_client.client import Client
+    from lakefs_client import ApiClient, Configuration
 
     if config is None:
         config = LakeFSConfig.from_env()
 
-    configuration = lakefs_client.Configuration(
+    configuration = Configuration(
         host=config.endpoint,
         username=config.access_key_id,
         password=config.secret_access_key,
     )
 
-    return Client(configuration)
+    return ApiClient(configuration)
 
 
 def ensure_repository(
