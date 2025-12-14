@@ -26,6 +26,10 @@ def _download_kaggle_dataset(dataset_slug: str, download_dir: Path) -> Path:
     api = KaggleApi()
     api.authenticate()
 
+    # Fix for User-Agent being None - explicitly set it after authentication
+    if api.configuration.user_agent is None:
+        api.configuration.user_agent = "Kaggle/1.0"
+
     api.dataset_download_files(dataset_slug, path=str(download_dir), unzip=True)
 
     return download_dir

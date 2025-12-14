@@ -28,4 +28,5 @@ dependencies = [
 ]
 
 [tool.uv]
-package-manager = true
+# uv package manager configuration
+dev-dependencies = []
