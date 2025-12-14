@@ -56,7 +56,7 @@ if [ "${PORT_FORWARD}" = "1" ] || [ "${PORT_FORWARD}" = "true" ]; then
   if ! bash "${ROOT_DIR}/tools/scripts/kind_portforward.sh" start; then
     echo "Port-forwarding failed; check logs under ${ROOT_DIR}/.task/port-forwards/${CLUSTER_NAME}/${NAMESPACE}/" >&2
   fi
-  echo "Endpoints: LakeFS http://localhost:8000, MinIO http://localhost:9000, MLflow http://localhost:5050, Redis 127.0.0.1:6379"
+  echo "Endpoints: LakeFS http://localhost:8000, MinIO API http://localhost:19000, MinIO Console http://localhost:19001, MLflow http://localhost:5050, Redis 127.0.0.1:16379"
 else
   echo "Port-forwarding is disabled (set PORT_FORWARD=1 to enable)."
   echo "Run: task port-forward"

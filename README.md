@@ -31,7 +31,12 @@ See inline README stubs and doc files under `docs/` for guidance on how each pac
   - Windows: `choco install go-task` (or `scoop install task`)
 - Direct: create a local cluster and deploy the data/metadata plane via `tools/scripts/kind_bootstrap.sh` (uses `infra/k8s/kind/kind-config.yaml` and `infra/k8s/kind/manifests`).
 - `task up` starts port-forwards by default (`PORT_FORWARD=1`); disable with `PORT_FORWARD=0 task up`. You can also run `task port-forward`, `task port-forward:status`, and `task port-forward:stop`.
-- Services available on host: LakeFS `http://localhost:8000`, MinIO `http://localhost:9000`, MLflow `http://localhost:5050`, Redis `127.0.0.1:6379`.
+- Services available on host:
+  - LakeFS: `http://localhost:8000`
+  - MinIO API: `http://localhost:19000` (returns 403 without auth)
+  - MinIO Console: `http://localhost:19001`
+  - MLflow: `http://localhost:5050`
+  - Redis: `127.0.0.1:16379` (use `redis-cli -h 127.0.0.1 -p 16379 ping`)
 - For cloud, reuse the same manifests with overlays to swap NodePort → LoadBalancer/Ingress and point LakeFS/MLflow at managed object storage + Postgres.
 
 ## Tests and CI

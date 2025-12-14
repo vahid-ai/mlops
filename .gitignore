@@ -18,6 +18,10 @@ __pycache__/
 # OS/filesystem noise
 .DS_Store
 
+# Env files
+.env
+.env.*
+
 # Local configuration file (sdk path, etc)
 local.properties
 
