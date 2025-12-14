@@ -27,6 +27,12 @@ dependencies = [
     "duckdb>=0.10",
 ]
 
-[tool.uv]
-# uv package manager configuration
-dev-dependencies = []
+[dependency-groups]
+dev = [
+    # Linting and type checking (per AGENTS.md)
+    "pyrefly>=0.15",
+    "torchfix>=0.4",
+    # Testing
+    "pytest>=8.0",
+    "pytest-cov>=4.1",
+]
