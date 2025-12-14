@@ -24,4 +24,4 @@ kubectl apply -k "${KUSTOMIZE_DIR}"
 kubectl wait --namespace dfp --for=condition=available deployment/minio deployment/redis deployment/lakefs deployment/mlflow deployment/lakefs-postgres --timeout=180s
 
 echo "Kind cluster '${CLUSTER_NAME}' is ready."
-echo "Endpoints: LakeFS http://localhost:8000, MinIO http://localhost:9000, MLflow http://localhost:5000, Redis 127.0.0.1:6379"
+echo "Endpoints: LakeFS http://localhost:8000, MinIO http://localhost:9000, MLflow http://localhost:5050, Redis 127.0.0.1:6379"
