@@ -44,6 +44,99 @@ See inline README stubs and doc files under `docs/` for guidance on how each pac
 - Kubeflow Pipelines: `task kfp:up` (requires network to fetch upstream manifests)
 - For cloud, reuse the same manifests with overlays to swap NodePort → LoadBalancer/Ingress and point LakeFS/MLflow at managed object storage + Postgres.
 
+### Managing MinIO Buckets
+
+MinIO credentials: `minioadmin` / `minioadmin`
+
+#### Listing Buckets
+
+**Using MinIO Client (mc)**:
+```bash
+# Install mc (macOS)
+brew install minio/stable/mc
+
+# Start port-forwarding (if not already running)
+./tools/scripts/kind_portforward.sh start
+
+# Configure the MinIO client
+mc alias set dfp-minio http://localhost:19000 minioadmin minioadmin
+
+# List all buckets
+mc ls dfp-minio
+```
+
+**Using kubectl exec**:
+```bash
+kubectl exec -n dfp deployment/minio -- mc alias set local http://localhost:9000 minioadmin minioadmin
+kubectl exec -n dfp deployment/minio -- mc ls local
+```
+
+**Using Python boto3**:
+```python
+import boto3
+
+s3 = boto3.client(
+    's3',
+    endpoint_url='http://localhost:19000',
+    aws_access_key_id='minioadmin',
+    aws_secret_access_key='minioadmin'
+)
+
+buckets = s3.list_buckets()
+for bucket in buckets['Buckets']:
+    print(bucket['Name'])
+```
+
+**Using MinIO Console UI**: Navigate to `http://localhost:19001` and login with `minioadmin` / `minioadmin`.
+
+#### Deleting Buckets
+
+**Using MinIO Client (mc)**:
+```bash
+# Delete an empty bucket
+mc rb dfp-minio/bucket-name
+
+# Delete a bucket and ALL its contents (force)
+mc rb --force dfp-minio/bucket-name
+```
+
+**Using AWS CLI**:
+```bash
+# Delete an empty bucket
+aws s3 rb s3://bucket-name --endpoint-url http://localhost:19000
+
+# Delete a bucket with all contents (force)
+aws s3 rb s3://bucket-name --force --endpoint-url http://localhost:19000
+```
+
+**Using Python boto3**:
+```python
+import boto3
+
+s3 = boto3.client(
+    's3',
+    endpoint_url='http://localhost:19000',
+    aws_access_key_id='minioadmin',
+    aws_secret_access_key='minioadmin'
+)
+
+s3_resource = boto3.resource(
+    's3',
+    endpoint_url='http://localhost:19000',
+    aws_access_key_id='minioadmin',
+    aws_secret_access_key='minioadmin'
+)
+
+bucket_name = 'bucket-name'
+# Delete all objects first (for non-empty buckets)
+bucket = s3_resource.Bucket(bucket_name)
+bucket.objects.all().delete()
+# Then delete the bucket
+s3.delete_bucket(Bucket=bucket_name)
+```
+
+⚠️ **Warning**: Deleting buckets is irreversible. If LakeFS or other services are using specific buckets, deleting them will break those services until the buckets are recreated.
+
 ## Kronodroid Data Pipeline
 
 The Kronodroid Android malware detection dataset can be ingested from Kaggle and processed through the dlt + dbt + Feast pipeline.
