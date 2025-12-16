@@ -26,6 +26,14 @@ cd notebooks
 jupyter notebook feast_spark_explorer.ipynb
 ```
 
+### `run_kronodroid_pipeline.ipynb`
+
+Notebook runner equivalent of `tools/scripts/run_kronodroid_pipeline.py`.
+
+**Features:**
+- Runs the Kronodroid pipeline step-by-step (dlt → dbt → Feast → LakeFS commit)
+- Provides a single "Run full pipeline" cell mirroring the script flags
+
 ## Environment Variables
 
 The notebooks expect these environment variables (with defaults for local development):

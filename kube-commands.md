@@ -23,3 +23,4 @@ kubectl logs -l app=my-app	Retrieve logs from all pods matching a specific label
 2. https://spacelift.io/blog/kubectl-logs
 3. https://kubernetes.io/docs/reference/kubectl/generated/kubectl_logs/
 4. https://jamesdefabia.github.io/docs/user-guide/kubectl/kubectl_logs/
+5. https://docs.spacelift.io/concepts/worker-pools/kubernetes-workers

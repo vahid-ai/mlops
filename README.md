@@ -38,11 +38,37 @@ See inline README stubs and doc files under `docs/` for guidance on how each pac
   - MLflow: `http://localhost:5050`
   - Redis: `127.0.0.1:16379` (use `redis-cli -h 127.0.0.1 -p 16379 ping`)
   - Feast feature server: `http://localhost:16566`
+  - Spark Thrift Server: `localhost:10000` (for dbt-spark, requires addon)
+  - Spark UI: `http://localhost:4040` (requires addon)
 - Optional addons (installed by `task up WITH_SPARK_OPERATOR=1 WITH_FEAST=1` or `task addons:up`):
   - Spark Operator (SparkApplication CRD/controller)
+  - Spark Thrift Server (for dbt-spark connectivity)
   - Feast feature server (serving from an embedded `registry.db`)
 - Kubeflow Pipelines: `task kfp:up` (requires network to fetch upstream manifests)
 - For cloud, reuse the same manifests with overlays to swap NodePort → LoadBalancer/Ingress and point LakeFS/MLflow at managed object storage + Postgres.
+
+### Spark Thrift Server (for dbt-spark)
+
+The Spark Thrift Server provides a HiveServer2-compatible interface for dbt-spark transformations with Iceberg tables.
+
+**Deploy Spark Thrift Server:**
+```bash
+kubectl apply -k infra/k8s/kind/addons/spark-thrift/
+```
+
+**Wait for it to be ready:**
+```bash
+kubectl -n dfp wait --for=condition=ready pod -l app=spark-thrift-server --timeout=120s
+```
+
+**Access endpoints:**
+- Thrift Server: `localhost:10000` (for dbt-spark connections)
+- Spark UI: `http://localhost:4040`
+
+The Thrift Server is pre-configured with:
+- Iceberg Spark extensions
+- LakeFS catalog (`lakefs_catalog`) pointing to MinIO
+- S3A filesystem for MinIO connectivity
 
 ### Managing MinIO Buckets
 
@@ -143,36 +169,45 @@ The Kronodroid Android malware detection dataset can be ingested from Kaggle and
 
 ### Prerequisites
 1. Start the kind cluster with `task up`
-2. Ensure you have a Kaggle API token in `.env` as `KAGGLE_API_TOKEN`
-3. Install Python dependencies: `uv pip install -e .`
+2. Deploy Spark Thrift Server for dbt transformations:
+   ```bash
+   kubectl apply -k infra/k8s/kind/addons/spark-thrift/
+   kubectl -n dfp wait --for=condition=ready pod -l app=spark-thrift-server --timeout=120s
+   ```
+3. Ensure you have a Kaggle API token in `.env` as `KAGGLE_API_TOKEN`
+4. Install Python dependencies: `uv pip install -e .`
 
 ### Running the Pipeline
 
 ```bash
 # Full pipeline: Kaggle → MinIO → dbt → Feast
-python tools/scripts/run_kronodroid_pipeline.py --destination minio
+uv run tools/scripts/run_kronodroid_pipeline.py
 
-# With LakeFS versioning
-python tools/scripts/run_kronodroid_pipeline.py --destination lakefs --branch dev
+# Skip dbt transformations (ingestion only)
+uv run tools/scripts/run_kronodroid_pipeline.py --skip-dbt
 
 # Skip ingestion (if data already loaded)
-python tools/scripts/run_kronodroid_pipeline.py --skip-ingestion
+uv run tools/scripts/run_kronodroid_pipeline.py --skip-ingestion
 
 # Only materialize features to Redis
-python tools/scripts/run_kronodroid_pipeline.py --materialize-only
+uv run tools/scripts/run_kronodroid_pipeline.py --materialize-only
 ```
 
 ### Pipeline Components
 
-1. **dlt Engine** (`engines/dlt_engine/dfp_dlt/`): Downloads Kronodroid from Kaggle and loads to MinIO/LakeFS
-2. **dbt Models** (`analytics/dbt/models/*/kronodroid/`): Transforms raw data into feature tables
-3. **Feast Features** (`feature_stores/feast_store/dfp_feast/kronodroid_features.py`): Feature definitions for ML
+1. **dlt Engine** (`engines/dlt_engine/dfp_dlt/`): Downloads Kronodroid from Kaggle and loads to MinIO as Parquet
+2. **dbt-spark** (`analytics/dbt/`): Connects to Spark Thrift Server to transform raw data into Iceberg feature tables
+3. **Feast Features** (`feature_stores/feast_store/dfp_feast/kronodroid_features.py`): Feature definitions for ML training and serving
 
 ### Data Flow
 ```
-Kaggle API → dlt → MinIO (raw) → dbt → MinIO (transformed) → Feast → Redis (online)
-                     ↓                        ↓
-                  LakeFS (versioning)    LakeFS (versioning)
+Kaggle API → dlt → Parquet → MinIO (raw)
+                                ↓
+                    Spark Thrift Server (dbt-spark)
+                                ↓
+                    Iceberg Tables → LakeFS (versioned)
+                                ↓
+                          Feast → Redis (online serving)
 ```
 
 ## Tests and CI
