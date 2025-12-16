@@ -4,19 +4,33 @@ name: dfp-kind
 nodes:
   - role: control-plane
     extraPortMappings:
+      # LakeFS
       - containerPort: 30080
         hostPort: 8000
         listenAddress: "0.0.0.0"
         protocol: TCP
+      # MinIO
       - containerPort: 30090
         hostPort: 9000
         listenAddress: "0.0.0.0"
         protocol: TCP
+      # MLflow
       - containerPort: 30500
         hostPort: 5050
         listenAddress: "0.0.0.0"
         protocol: TCP
+      # Redis
       - containerPort: 30379
         hostPort: 6379
+        listenAddress: "0.0.0.0"
+        protocol: TCP
+      # Spark Thrift Server (for dbt-spark)
+      - containerPort: 31000
+        hostPort: 10000
+        listenAddress: "0.0.0.0"
+        protocol: TCP
+      # Spark UI
+      - containerPort: 31040
+        hostPort: 4040
         listenAddress: "0.0.0.0"
         protocol: TCP

@@ -2,56 +2,36 @@
 # Set DBT_PROFILES_DIR to this directory or copy to ~/.dbt/profiles.yml
 #
 # Data Flow:
-#   - "dev" target: Uses embedded Spark session with Iceberg + LakeFS
-#   - "thrift" target: Connects to Spark Thrift Server for production
+#   - "dev" target: Connects to Spark Thrift Server in Kind cluster
+#   - "prod" target: Connects to production Spark Thrift Server
 #   - "legacy_duckdb" target: Legacy DuckDB mode (deprecated)
 #
 # Iceberg tables are stored on LakeFS with Avro format for versioned data.
+#
+# To start Spark Thrift Server in Kind:
+#   kubectl apply -k infra/k8s/kind/addons/spark-thrift/
 
 dfp:
   target: dev
   outputs:
-    # Local development with embedded Spark + Iceberg
-    # Uses session method for single-node Spark
+    # Local development via Spark Thrift Server in Kind
+    # Requires: kubectl apply -k infra/k8s/kind/addons/spark-thrift/
+    # Exposed at localhost:10000 via NodePort
     dev:
-      type: spark
-      method: session
-      schema: dfp
-      # Iceberg catalog configuration
-      catalog: lakefs_catalog
-      # Enable Iceberg file format
-      file_format: iceberg
-      # Spark configuration passed to session
-      spark_config:
-        # Iceberg Spark extensions
-        spark.sql.extensions: org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions
-        # Configure Iceberg catalog
-        spark.sql.catalog.lakefs_catalog: org.apache.iceberg.spark.SparkCatalog
-        spark.sql.catalog.lakefs_catalog.type: hadoop
-        spark.sql.catalog.lakefs_catalog.warehouse: "{{ env_var('LAKEFS_WAREHOUSE', 's3a://kronodroid/main/iceberg') }}"
-        # S3A configuration for LakeFS
-        spark.hadoop.fs.s3a.endpoint: "{{ env_var('LAKEFS_ENDPOINT_URL', 'http://localhost:8000') }}"
-        spark.hadoop.fs.s3a.access.key: "{{ env_var('LAKEFS_ACCESS_KEY_ID', '') }}"
-        spark.hadoop.fs.s3a.secret.key: "{{ env_var('LAKEFS_SECRET_ACCESS_KEY', '') }}"
-        spark.hadoop.fs.s3a.path.style.access: "true"
-        spark.hadoop.fs.s3a.impl: org.apache.hadoop.fs.s3a.S3AFileSystem
-        spark.hadoop.fs.s3a.connection.ssl.enabled: "false"
-        # Avro as default write format for Iceberg
-        spark.sql.iceberg.write.format.default: avro
-        # Driver/executor memory
-        spark.driver.memory: 2g
-        spark.executor.memory: 2g
-      # Packages to include
-      packages:
-        - org.apache.iceberg:iceberg-spark-runtime-3.5_2.12:1.5.0
-        - org.apache.iceberg:iceberg-aws-bundle:1.5.0
-        - org.apache.spark:spark-avro_2.12:3.5.0
-
-    # Spark Thrift Server connection (production)
-    thrift:
       type: spark
       method: thrift
       host: "{{ env_var('SPARK_THRIFT_HOST', 'localhost') }}"
+      port: "{{ env_var('SPARK_THRIFT_PORT', 10000) | int }}"
+      schema: dfp
+      # Iceberg catalog (configured in Thrift Server startup)
+      catalog: lakefs_catalog
+      file_format: iceberg
+
+    # Production Spark Thrift Server connection
+    prod:
+      type: spark
+      method: thrift
+      host: "{{ env_var('SPARK_THRIFT_HOST', 'spark-thrift.prod.internal') }}"
       port: "{{ env_var('SPARK_THRIFT_PORT', 10000) | int }}"
       schema: dfp
       catalog: lakefs_catalog

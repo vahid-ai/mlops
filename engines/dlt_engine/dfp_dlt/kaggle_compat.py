@@ -1,21 +1,20 @@
 """Compatibility helpers for Kaggle ingestion.
 
-The upstream `kaggle` Python package currently constructs a `KaggleHttpClient`
-with `user_agent=None` via `kagglesdk.KaggleClient`, which causes `requests` to
-raise `InvalidHeader` when preparing a request.
-
-This module patches `kagglesdk` at runtime to ensure a non-None User-Agent is
-used before importing `kaggle` (which authenticates at import time).
+The upstream `kaggle` Python package previously required patching for user_agent
+handling. This module patches `kagglesdk` at runtime to handle different SDK
+versions - older versions with user_agent parameter and newer versions that
+handle User-Agent internally.
 """
 
 from __future__ import annotations
 
+import inspect
 from functools import wraps
 from typing import Any
 
 
 def patch_kagglesdk_user_agent() -> None:
-    """Ensure kagglesdk never initializes a session with a None User-Agent."""
+    """Ensure kagglesdk works correctly across different SDK versions."""
     try:
         from kagglesdk.kaggle_http_client import KaggleHttpClient
     except Exception:
@@ -31,14 +30,20 @@ def patch_kagglesdk_user_agent() -> None:
 
     @wraps(original_init)
     def patched_init(self, *args: Any, **kwargs: Any) -> None:  # type: ignore[no-untyped-def]
-        # `user_agent` is the 6th arg after `self` in the current signature:
-        # (env, verbose, username, password, api_token, user_agent)
-        if len(args) >= 6 and args[5] is None:
-            args = list(args)
-            args[5] = default_user_agent
-            args = tuple(args)
-        if kwargs.get("user_agent") is None:
-            kwargs["user_agent"] = default_user_agent
+        # Check if user_agent is a valid parameter before modifying kwargs
+        sig = inspect.signature(original_init)
+        param_names = list(sig.parameters.keys())
+
+        if "user_agent" in param_names:
+            # Old SDK version with user_agent parameter - apply fix
+            if len(args) >= 6 and args[5] is None:
+                args = list(args)
+                args[5] = default_user_agent
+                args = tuple(args)
+            if kwargs.get("user_agent") is None:
+                kwargs["user_agent"] = default_user_agent
+        # New SDK version handles User-Agent internally, no patch needed
+
         original_init(self, *args, **kwargs)
 
     KaggleHttpClient.__init__ = patched_init  # type: ignore[assignment]

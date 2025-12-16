@@ -4,8 +4,26 @@ This overlay runs the local data/metadata plane (MinIO, LakeFS, MLflow, Redis) o
 
 ## Run locally
 1) Create the cluster and deploy services: `tools/scripts/kind_bootstrap.sh` (uses `infra/k8s/kind/kind-config.yaml` and `infra/k8s/kind/manifests`).
-2) Access endpoints: LakeFS `http://localhost:8000`, MinIO `http://localhost:9000`, MLflow `http://localhost:5000`, Redis `127.0.0.1:6379`.
+2) Access endpoints: LakeFS `http://localhost:8000`, MinIO `http://localhost:9000`, MLflow `http://localhost:5050`, Redis `127.0.0.1:6379`.
 3) Tear down: `kind delete cluster --name dfp-kind`.
+
+## Spark Thrift Server (for dbt-spark)
+
+The Spark Thrift Server provides a HiveServer2-compatible interface for dbt-spark transformations.
+
+Deploy Spark Thrift Server:
+```bash
+kubectl apply -k infra/k8s/kind/addons/spark-thrift/
+```
+
+Wait for it to be ready:
+```bash
+kubectl -n dfp wait --for=condition=ready pod -l app=spark-thrift-server --timeout=120s
+```
+
+Access endpoints:
+- Thrift Server: `localhost:10000` (for dbt-spark connections)
+- Spark UI: `http://localhost:4040`
 
 ## Cloud parity
 - Replace NodePort services with LoadBalancer/Ingress in a cloud overlay while reusing the same manifests for pods/config.

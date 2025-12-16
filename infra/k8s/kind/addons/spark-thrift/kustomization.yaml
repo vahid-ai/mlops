@@ -1,0 +1,7 @@
+# Spark Thrift Server for dbt-spark connectivity
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: dfp
+resources:
+  - spark-thrift-deployment.yaml
+  - spark-thrift-service.yaml

@@ -82,11 +82,30 @@ def run_dlt_ingestion(file_format: str = "parquet") -> bool:
         return False
 
 
+def check_spark_thrift_server(host: str = "localhost", port: int = 10000) -> bool:
+    """Check if Spark Thrift Server is reachable.
+
+    Args:
+        host: Thrift server host
+        port: Thrift server port
+
+    Returns:
+        True if server is reachable
+    """
+    import socket
+
+    try:
+        with socket.create_connection((host, port), timeout=5):
+            return True
+    except (OSError, TimeoutError):
+        return False
+
+
 def run_dbt_spark_transformations(target: str = "dev") -> bool:
     """Run dbt-spark transformations to build Iceberg feature tables.
 
     Args:
-        target: dbt target profile to use (dev or thrift)
+        target: dbt target profile to use (dev or prod)
 
     Returns:
         True if successful
@@ -94,6 +113,24 @@ def run_dbt_spark_transformations(target: str = "dev") -> bool:
     print("\n" + "=" * 60)
     print("Step 2: Running dbt-spark transformations → Iceberg tables")
     print("=" * 60)
+
+    # Check Spark Thrift Server connectivity
+    thrift_host = os.getenv("SPARK_THRIFT_HOST", "localhost")
+    thrift_port = int(os.getenv("SPARK_THRIFT_PORT", "10000"))
+
+    print(f"Checking Spark Thrift Server at {thrift_host}:{thrift_port}...")
+    if not check_spark_thrift_server(thrift_host, thrift_port):
+        print(f"ERROR: Cannot connect to Spark Thrift Server at {thrift_host}:{thrift_port}")
+        print("\nTo start Spark Thrift Server in Kind cluster:")
+        print("  1. Ensure Kind cluster is running: kind get clusters")
+        print("  2. Deploy Spark Thrift Server:")
+        print("     kubectl apply -k infra/k8s/kind/addons/spark-thrift/")
+        print("  3. Wait for pod to be ready:")
+        print("     kubectl -n dfp wait --for=condition=ready pod -l app=spark-thrift-server --timeout=120s")
+        print("\nOr set SPARK_THRIFT_HOST and SPARK_THRIFT_PORT env vars for remote server.")
+        return False
+
+    print(f"  ✓ Spark Thrift Server is reachable")
 
     dbt_project_dir = PROJECT_ROOT / "analytics" / "dbt"
 
@@ -138,7 +175,7 @@ def run_dbt_spark_transformations(target: str = "dev") -> bool:
         print(f"stderr: {e.stderr}")
         return False
     except FileNotFoundError:
-        print("ERROR: dbt command not found. Install with: pip install dbt-spark[session]")
+        print("ERROR: dbt command not found. Install with: pip install dbt-spark")
         return False
 
 

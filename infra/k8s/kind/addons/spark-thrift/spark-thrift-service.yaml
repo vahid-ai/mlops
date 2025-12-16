@@ -1,0 +1,22 @@
+# Spark Thrift Server Service
+# Exposes HiveServer2 port for dbt-spark connections
+apiVersion: v1
+kind: Service
+metadata:
+  name: spark-thrift-server
+  namespace: dfp
+  labels:
+    app: spark-thrift-server
+spec:
+  type: NodePort
+  ports:
+    - name: thrift
+      port: 10000
+      targetPort: 10000
+      nodePort: 31000
+    - name: spark-ui
+      port: 4040
+      targetPort: 4040
+      nodePort: 31040
+  selector:
+    app: spark-thrift-server
