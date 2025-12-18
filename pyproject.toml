@@ -12,7 +12,7 @@ dependencies = [
     "mlflow>=2.9",
     "feast[redis,spark]>=0.32",
     "pyspark>=3.5",
-    "lakefs-client>=1.1",
+    "lakefs-sdk>=0.120.0",
     "dagster~=1.4",
     "torch>=2.1",
     # dlt and dbt for data ingestion and transformation

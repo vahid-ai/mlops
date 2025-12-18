@@ -53,20 +53,21 @@ def get_lakefs_client(config: LakeFSConfig | None = None):
         config: LakeFS configuration. If None, loads from environment.
 
     Returns:
-        Configured lakefs_client.ApiClient instance
+        Configured lakefs_sdk.client.LakeFSClient instance
     """
-    from lakefs_client import ApiClient, Configuration
+    import lakefs_sdk
+    from lakefs_sdk.client import LakeFSClient
 
     if config is None:
         config = LakeFSConfig.from_env()
 
-    configuration = Configuration(
+    configuration = lakefs_sdk.Configuration(
         host=config.endpoint,
         username=config.access_key_id,
         password=config.secret_access_key,
     )
 
-    return ApiClient(configuration)
+    return LakeFSClient(configuration)
 
 
 def ensure_repository(
@@ -78,7 +79,7 @@ def ensure_repository(
     """Ensure a LakeFS repository exists, creating it if necessary.
 
     Args:
-        client: LakeFS client instance
+        client: LakeFS client instance (LakeFSClient from lakefs_sdk)
         repository: Repository name
         storage_namespace: S3 storage namespace (defaults to s3://{repository})
         default_branch: Default branch name
@@ -86,17 +87,14 @@ def ensure_repository(
     Returns:
         True if repository was created, False if it already existed
     """
-    from lakefs_client.api import repositories_api
-    from lakefs_client.model.repository_creation import RepositoryCreation
-    from lakefs_client.exceptions import NotFoundException
+    from lakefs_sdk.exceptions import NotFoundException
+    from lakefs_sdk.models import RepositoryCreation
 
     if storage_namespace is None:
         storage_namespace = f"s3://{repository}"
 
-    repos_api = repositories_api.RepositoriesApi(client)
-
     try:
-        repos_api.get_repository(repository)
+        client.repositories_api.get_repository(repository)
         return False
     except NotFoundException:
         repo_creation = RepositoryCreation(
@@ -104,7 +102,7 @@ def ensure_repository(
             storage_namespace=storage_namespace,
             default_branch=default_branch,
         )
-        repos_api.create_repository(repo_creation)
+        client.repositories_api.create_repository(repo_creation)
         return True
 
 
@@ -117,7 +115,7 @@ def ensure_branch(
     """Ensure a LakeFS branch exists, creating it if necessary.
 
     Args:
-        client: LakeFS client instance
+        client: LakeFS client instance (LakeFSClient from lakefs_sdk)
         repository: Repository name
         branch: Branch name to ensure
         source_branch: Source branch to create from
@@ -125,23 +123,20 @@ def ensure_branch(
     Returns:
         True if branch was created, False if it already existed
     """
-    from lakefs_client.api import branches_api
-    from lakefs_client.model.branch_creation import BranchCreation
-    from lakefs_client.exceptions import NotFoundException
-
-    branches = branches_api.BranchesApi(client)
+    from lakefs_sdk.exceptions import NotFoundException
+    from lakefs_sdk.models import BranchCreation
 
     try:
-        branches.get_branch(repository, branch)
+        client.branches_api.get_branch(repository, branch)
         return False
     except NotFoundException:
         # Get source branch ref
-        source = branches.get_branch(repository, source_branch)
+        source = client.branches_api.get_branch(repository, source_branch)
         branch_creation = BranchCreation(
             name=branch,
             source=source.commit_id,
         )
-        branches.create_branch(repository, branch_creation)
+        client.branches_api.create_branch(repository, branch_creation)
         return True
 
 
@@ -155,7 +150,7 @@ def commit_changes(
     """Commit staged changes in a LakeFS branch.
 
     Args:
-        client: LakeFS client instance
+        client: LakeFS client instance (LakeFSClient from lakefs_sdk)
         repository: Repository name
         branch: Branch name
         message: Commit message
@@ -164,17 +159,14 @@ def commit_changes(
     Returns:
         Commit ID
     """
-    from lakefs_client.api import commits_api
-    from lakefs_client.model.commit_creation import CommitCreation
-
-    commits = commits_api.CommitsApi(client)
+    from lakefs_sdk.models import CommitCreation
 
     commit_creation = CommitCreation(
         message=message,
         metadata=metadata or {},
     )
 
-    result = commits.commit(repository, branch, commit_creation)
+    result = client.commits_api.commit(repository, branch, commit_creation)
     return result.id
 
 
@@ -242,20 +234,18 @@ def merge_dlt_branch(
     Returns:
         Merge commit ID
     """
-    from lakefs_client.api import refs_api
-    from lakefs_client.model.merge import Merge
+    from lakefs_sdk.models import Merge
 
     if config is None:
         config = LakeFSConfig.from_env()
 
     client = get_lakefs_client(config)
-    refs = refs_api.RefsApi(client)
 
     merge = Merge(
         message=f"Merge {branch_name} into {target_branch}",
     )
 
-    result = refs.merge_into_branch(
+    result = client.refs_api.merge_into_branch(
         config.repository,
         branch_name,
         target_branch,
