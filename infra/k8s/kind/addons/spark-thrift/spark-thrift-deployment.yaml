@@ -19,7 +19,7 @@ spec:
     spec:
       containers:
         - name: spark-thrift
-          image: bitnami/spark:3.5
+          image: apache/spark:3.5.7-python3
           command:
             - /bin/bash
             - -c
