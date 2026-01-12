@@ -180,15 +180,16 @@ def _render_sparkapplication_yaml(app_name: str, cfg: KronodroidSparkOperatorCon
         f"spark.sql.catalog.{cfg.iceberg_catalog}.type": "hadoop",
         f"spark.sql.catalog.{cfg.iceberg_catalog}.warehouse": f"s3a://{cfg.lakefs_repository}/{cfg.lakefs_branch}/iceberg",
         "spark.sql.iceberg.write.format.default": "avro",
+        # Default LakeFS S3 gateway for Iceberg tables; MinIO raw bucket overrides below.
+        "spark.hadoop.fs.s3a.endpoint": cfg.k8s_lakefs_endpoint_url,
+        "spark.hadoop.fs.s3a.access.key": cfg.lakefs_access_key_id,
+        "spark.hadoop.fs.s3a.secret.key": cfg.lakefs_secret_access_key,
         "spark.hadoop.fs.s3a.path.style.access": "true",
         "spark.hadoop.fs.s3a.impl": "org.apache.hadoop.fs.s3a.S3AFileSystem",
         "spark.hadoop.fs.s3a.connection.ssl.enabled": "false",
         f"spark.hadoop.fs.s3a.bucket.{cfg.raw_bucket}.endpoint": cfg.k8s_minio_endpoint_url,
         f"spark.hadoop.fs.s3a.bucket.{cfg.raw_bucket}.access.key": cfg.minio_access_key_id,
         f"spark.hadoop.fs.s3a.bucket.{cfg.raw_bucket}.secret.key": cfg.minio_secret_access_key,
-        f"spark.hadoop.fs.s3a.bucket.{cfg.lakefs_repository}.endpoint": cfg.k8s_lakefs_endpoint_url,
-        f"spark.hadoop.fs.s3a.bucket.{cfg.lakefs_repository}.access.key": cfg.lakefs_access_key_id,
-        f"spark.hadoop.fs.s3a.bucket.{cfg.lakefs_repository}.secret.key": cfg.lakefs_secret_access_key,
     }
 
     spark_conf_yaml = "\n".join(

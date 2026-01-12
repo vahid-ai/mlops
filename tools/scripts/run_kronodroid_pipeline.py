@@ -186,6 +186,7 @@ def run_kubeflow_spark_operator_transformations(
     spark_image: str = "apache/spark:3.5.7-python3",
     service_account: str = "spark-operator",
     timeout_seconds: int = 60 * 30,
+    raw_format: str | None = None,
 ) -> bool:
     """Run Spark transformations via Spark Operator (SparkApplication).
 
@@ -212,6 +213,8 @@ def run_kubeflow_spark_operator_transformations(
     print(f"Service account: {service_account}")
     print(f"Timeout: {timeout_seconds}s")
 
+    resolved_raw_format = raw_format or os.getenv("RAW_FORMAT", "parquet")
+
     cfg = KronodroidSparkOperatorConfig(
         namespace=namespace,
         spark_image=spark_image,
@@ -219,7 +222,7 @@ def run_kubeflow_spark_operator_transformations(
         timeout_seconds=timeout_seconds,
         raw_bucket=os.getenv("MINIO_BUCKET_NAME", "dlt-data"),
         raw_dataset=os.getenv("RAW_DATASET", "kronodroid_raw"),
-        raw_format=os.getenv("RAW_FORMAT", "parquet"),
+        raw_format=resolved_raw_format,
         k8s_minio_endpoint_url=os.getenv(
             "K8S_MINIO_ENDPOINT_URL", "http://minio.dfp.svc.cluster.local:9000"
         ),
@@ -490,7 +493,12 @@ def main():
     print(f"  LakeFS branch: {args.branch}")
     print(f"  dbt target: {args.dbt_target}")
     print(f"  transform runner: {args.transform_runner}")
-    print(f"  Raw format: {args.file_format}")
+    raw_format = os.getenv("RAW_FORMAT")
+    if not raw_format:
+        raw_format = "parquet" if args.file_format == "avro" else args.file_format
+        os.environ["RAW_FORMAT"] = raw_format
+
+    print(f"  Raw format: {raw_format}")
     print("")
     print("  Flow: Kaggle → dlt → Parquet → MinIO → Spark → Iceberg → LakeFS → Feast")
 
@@ -520,6 +528,7 @@ def main():
                     spark_image=args.spark_image,
                     service_account=args.spark_service_account,
                     timeout_seconds=args.spark_timeout_seconds,
+                    raw_format=raw_format,
                 ):
                     success = False
                     print("\nPipeline failed at SparkApplication transformation step")

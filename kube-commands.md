@@ -15,6 +15,14 @@ kubectl logs <pod-name> > <file-name.log>	// Save logs to a local file for later
 
 kubectl logs -l app=my-app	Retrieve logs from all pods matching a specific label
 
+kubectl get pods
+
+kubectl get pods --all-namespaces
+
+kubectl get pods --namespace <namespace_name> (or -n <namespace_name>)
+
+kubectl config get-clusters
+
 # Project Specific
 - Reason: Need to verify the Spark operator pod is now Running after updating the image tag - `kubectl -n dfp get pods -l app=spark-operator -o wide`
 
