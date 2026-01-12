@@ -23,15 +23,215 @@ Usage:
 """
 
 import argparse
+import json
 import os
 import subprocess
 import sys
+import time
 from datetime import datetime, timedelta
 from pathlib import Path
+from typing import Any, Dict, List, Optional
 
 # Add project root to path
 PROJECT_ROOT = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
+
+
+# ---------------------------------------------------------------------------
+# Kubernetes / Spark Operator Helpers (similar to spark_operator_test.ipynb)
+# ---------------------------------------------------------------------------
+
+
+def run_kubectl(
+    args: List[str], *, check: bool = True, capture: bool = True
+) -> subprocess.CompletedProcess:
+    """Run a kubectl command and return the result."""
+    cmd = ["kubectl"] + args
+    try:
+        result = subprocess.run(cmd, check=check, capture_output=capture, text=True)
+        return result
+    except subprocess.CalledProcessError as e:
+        if not capture:
+            raise
+        print(f"Command failed: {' '.join(cmd)}")
+        if e.stdout:
+            print(f"stdout: {e.stdout}")
+        if e.stderr:
+            print(f"stderr: {e.stderr}")
+        raise
+
+
+def kubectl_get_json(
+    resource: str, name: str = "", namespace: str = "dfp"
+) -> Optional[Dict]:
+    """Get a Kubernetes resource as JSON."""
+    try:
+        args = ["-n", namespace, "get", resource]
+        if name:
+            args.append(name)
+        args.extend(["-o", "json"])
+        result = run_kubectl(args)
+        return json.loads(result.stdout)
+    except subprocess.CalledProcessError:
+        return None
+    except json.JSONDecodeError:
+        return None
+
+
+def print_status(status: str, message: str):
+    """Print a status message with icon."""
+    icons = {
+        "success": "[OK]",
+        "warning": "[WARN]",
+        "error": "[ERROR]",
+        "info": "[INFO]",
+        "pending": "[...]",
+    }
+    icon = icons.get(status, "[?]")
+    print(f"{icon} {message}")
+
+
+def get_spark_application_status(app_name: str, namespace: str = "dfp") -> Dict[str, Any]:
+    """Get the current status of a SparkApplication."""
+    app = kubectl_get_json("sparkapplication", app_name, namespace)
+
+    if not app:
+        return {"found": False, "state": "NOT_FOUND"}
+
+    status = app.get("status", {})
+    app_state = status.get("applicationState", {})
+
+    return {
+        "found": True,
+        "state": app_state.get("state", "UNKNOWN"),
+        "error_message": app_state.get("errorMessage", ""),
+        "driver_info": status.get("driverInfo", {}),
+        "executor_state": status.get("executorState", {}),
+        "last_submission_attempt_time": status.get("lastSubmissionAttemptTime", ""),
+        "termination_time": status.get("terminationTime", ""),
+        "spark_application_id": status.get("sparkApplicationId", ""),
+    }
+
+
+def get_driver_logs(app_name: str, namespace: str = "dfp", tail: int = 100) -> str:
+    """Get logs from the driver pod."""
+    driver_pod = f"{app_name}-driver"
+
+    try:
+        result = run_kubectl(
+            ["-n", namespace, "logs", driver_pod, f"--tail={tail}"], check=False
+        )
+        if result.returncode == 0:
+            return result.stdout
+        else:
+            # Try with --previous flag for crashed containers
+            result = run_kubectl(
+                ["-n", namespace, "logs", driver_pod, "--previous", f"--tail={tail}"],
+                check=False,
+            )
+            if result.returncode == 0:
+                return result.stdout
+            return ""
+    except Exception:
+        return ""
+
+
+def monitor_spark_application_status(
+    app_name: str,
+    namespace: str = "dfp",
+    timeout_seconds: int = 1800,
+    poll_interval: int = 5,
+    verbose: bool = True,
+) -> Dict[str, Any]:
+    """Monitor a SparkApplication until completion or timeout.
+
+    Returns:
+        Dict with 'success', 'state', 'elapsed', and optionally 'error' keys.
+    """
+    terminal_states = {"COMPLETED", "FAILED", "SUBMISSION_FAILED"}
+    start_time = time.time()
+    last_state = None
+
+    while True:
+        elapsed = int(time.time() - start_time)
+
+        if elapsed > timeout_seconds:
+            if verbose:
+                print_status("warning", f"Timeout after {elapsed}s")
+            return {"success": False, "reason": "TIMEOUT", "last_state": last_state}
+
+        status = get_spark_application_status(app_name, namespace)
+
+        if not status["found"]:
+            if verbose:
+                print_status(
+                    "warning", f"[{elapsed}s] SparkApplication not found, waiting..."
+                )
+            time.sleep(poll_interval)
+            continue
+
+        state = status["state"]
+
+        # Print state changes
+        if state != last_state:
+            timestamp = datetime.now().strftime("%H:%M:%S")
+            if verbose:
+                print(f"[{timestamp}] [{elapsed}s] State: {state}")
+
+                if status["driver_info"].get("podName"):
+                    print(f"           Driver: {status['driver_info']['podName']}")
+
+            last_state = state
+
+        # Check for terminal state
+        if state in terminal_states:
+            if state == "COMPLETED":
+                if verbose:
+                    print_status("success", f"SparkApplication completed in {elapsed}s")
+                return {"success": True, "state": state, "elapsed": elapsed}
+            else:
+                if verbose:
+                    print_status("error", f"SparkApplication {state} after {elapsed}s")
+                    if status["error_message"]:
+                        print(f"    Error: {status['error_message']}")
+                return {
+                    "success": False,
+                    "state": state,
+                    "error": status["error_message"],
+                    "elapsed": elapsed,
+                }
+
+        time.sleep(poll_interval)
+
+
+def list_spark_applications(namespace: str = "dfp") -> List[Dict]:
+    """List all SparkApplications in the namespace."""
+    apps = kubectl_get_json("sparkapplication", "", namespace)
+
+    if not apps or not apps.get("items"):
+        return []
+
+    result = []
+    for app in apps.get("items", []):
+        name = app.get("metadata", {}).get("name", "unknown")
+        state = (
+            app.get("status", {}).get("applicationState", {}).get("state", "UNKNOWN")
+        )
+        created = app.get("metadata", {}).get("creationTimestamp", "N/A")
+        result.append({"name": name, "state": state, "created": created})
+
+    return result
+
+
+def delete_spark_application(app_name: str, namespace: str = "dfp") -> bool:
+    """Delete a SparkApplication."""
+    try:
+        result = run_kubectl(
+            ["-n", namespace, "delete", "sparkapplication", app_name], check=False
+        )
+        return result.returncode == 0
+    except Exception:
+        return False
 
 
 def load_env_file(env_path: Path = PROJECT_ROOT / ".env"):
@@ -186,7 +386,7 @@ def run_kubeflow_spark_operator_transformations(
     spark_image: str = "apache/spark:3.5.7-python3",
     service_account: str = "spark-operator",
     timeout_seconds: int = 60 * 30,
-    raw_format: str | None = None,
+    raw_format: Optional[str] = None,
 ) -> bool:
     """Run Spark transformations via Spark Operator (SparkApplication).
 

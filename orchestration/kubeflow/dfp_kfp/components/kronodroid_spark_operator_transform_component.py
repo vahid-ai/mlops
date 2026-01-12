@@ -137,42 +137,94 @@ users:
     return kubeconfig_path
 
 
-def _render_configmap_yaml(name: str, namespace: str) -> str:
+def _upload_job_to_minio(job_name: str, cfg: KronodroidSparkOperatorConfig) -> str:
+    """Upload the job script to MinIO and return the S3 URL.
+
+    This works around Spark Operator's inability to reliably pass through
+    volumes/volumeMounts to the driver pod.
+    """
     job_path = _job_file()
     if not job_path.exists():
         raise FileNotFoundError(f"Spark job file not found: {job_path}")
 
-    result = _run(
-        [
-            "kubectl",
-            "-n",
-            namespace,
-            "create",
-            "configmap",
-            name,
-            f"--from-file=kronodroid_transform_job.py={str(job_path)}",
-            "--dry-run=client",
-            "-o",
-            "yaml",
-        ]
-    )
-    return result.stdout
+    # Upload via kubectl exec to the MinIO pod (simpler than setting up boto3 with MinIO)
+    # We use the spark-jobs/ prefix in the raw bucket
+    s3_key = f"spark-jobs/{job_name}/kronodroid_transform_job.py"
+    s3_url = f"s3a://{cfg.raw_bucket}/{s3_key}"
+
+    # Read the job script content
+    job_content = job_path.read_text()
+
+    # Create a temporary file in the MinIO pod and use mc to upload
+    # This approach uses port-forwarding through the MinIO service
+    import base64
+    job_b64 = base64.b64encode(job_content.encode()).decode()
+
+    # Use kubectl to create a job that uploads the file
+    # Alternative: use the minio-client (mc) if available locally
+    try:
+        # Try using mc (MinIO client) if available locally
+        result = subprocess.run(["which", "mc"], capture_output=True)
+        if result.returncode == 0:
+            # mc is available
+            # Ensure alias exists (ignore errors if it exists)
+            subprocess.run(
+                ["mc", "alias", "set", "dfp-k8s", cfg.k8s_minio_endpoint_url, cfg.minio_access_key_id, cfg.minio_secret_access_key],
+                capture_output=True
+            )
+            # Upload the file
+            with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False) as f:
+                f.write(job_content)
+                temp_path = f.name
+            try:
+                _run(["mc", "cp", temp_path, f"dfp-k8s/{cfg.raw_bucket}/{s3_key}"])
+                return s3_url
+            finally:
+                os.unlink(temp_path)
+    except Exception:
+        pass
+
+    # Fallback: use kubectl port-forward + boto3 or direct pod exec
+    # For simplicity, we'll use kubectl exec to run mc inside the MinIO pod
+    try:
+        # Write job content to a file in the minio pod
+        _run([
+            "kubectl", "-n", cfg.namespace, "exec", "-i", "deployment/minio", "--",
+            "sh", "-c", f"echo '{job_b64}' | base64 -d > /tmp/kronodroid_transform_job.py"
+        ])
+        # Use mc inside minio pod to upload (minio container has mc built-in as an alias)
+        _run([
+            "kubectl", "-n", cfg.namespace, "exec", "deployment/minio", "--",
+            "sh", "-c", f"mc alias set local http://localhost:9000 {cfg.minio_access_key_id} {cfg.minio_secret_access_key} && mc cp /tmp/kronodroid_transform_job.py local/{cfg.raw_bucket}/{s3_key}"
+        ])
+        return s3_url
+    except subprocess.CalledProcessError as e:
+        # If that fails, try using boto3 directly via port-forward
+        raise RuntimeError(
+            f"Failed to upload job script to MinIO. Error: {e.stderr}\n"
+            f"You may need to install 'mc' (MinIO client) locally or ensure MinIO pod is running."
+        )
 
 
-def _render_sparkapplication_yaml(app_name: str, cfg: KronodroidSparkOperatorConfig, configmap: str) -> str:
+def _render_sparkapplication_yaml(app_name: str, cfg: KronodroidSparkOperatorConfig, job_url: str) -> str:
     # Spark dependencies - versions must align with spark_version
     # For Spark 3.5.x, use compatible library versions
+    # NOTE: We use spark.jars.packages in sparkConf instead of deps.packages
+    # because deps.packages causes the Spark Operator to run spark-submit
+    # inside the operator pod to resolve dependencies, which can fail due to
+    # network issues or large file downloads (e.g., aws-java-sdk-bundle is 280MB).
+    # Using sparkConf moves the resolution to the driver pod instead.
     packages = [
         "org.apache.iceberg:iceberg-spark-runtime-3.5_2.12:1.5.0",  # Iceberg for Spark 3.5
         "org.apache.hadoop:hadoop-aws:3.3.4",                        # AWS S3 support
         "com.amazonaws:aws-java-sdk-bundle:1.12.262",                # AWS SDK
         "org.apache.spark:spark-avro_2.12:3.5.7",                    # Avro support for Spark 3.5
     ]
-    packages_yaml = "\n".join([f'      - "{p}"' for p in packages])
+    packages_str = ",".join(packages)
 
     spark_conf = {
-        # Spark resolves `deps.packages` via Ivy. In many k8s images the user has HOME=/nonexistent,
-        # which causes SparkSubmit to try writing to `/nonexistent/.ivy2` and crash.
+        # Use spark.jars.packages instead of deps.packages to resolve in driver pod
+        "spark.jars.packages": packages_str,
         # Force Ivy cache to a writable location.
         "spark.jars.ivy": "/tmp/.ivy2",
         "spark.sql.extensions": "org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions",
@@ -191,6 +243,9 @@ def _render_sparkapplication_yaml(app_name: str, cfg: KronodroidSparkOperatorCon
         f"spark.hadoop.fs.s3a.bucket.{cfg.raw_bucket}.access.key": cfg.minio_access_key_id,
         f"spark.hadoop.fs.s3a.bucket.{cfg.raw_bucket}.secret.key": cfg.minio_secret_access_key,
     }
+    # NOTE: ConfigMap volume mounting is handled via Spark Operator's volumes/volumeMounts
+    # in the SparkApplication YAML below, NOT via spark.kubernetes.driver.volumes.* properties
+    # (which don't support configMap type in Spark 3.5.x)
 
     spark_conf_yaml = "\n".join(
         [f"    {json.dumps(k)}: {json.dumps(str(v))}" for k, v in spark_conf.items()]
@@ -224,12 +279,11 @@ spec:
   sparkVersion: "{cfg.spark_version}"
   image: "{cfg.spark_image}"
   imagePullPolicy: IfNotPresent
-  # Note: Spark Operator commonly uses `/opt/spark/work-dir` internally (e.g., for downloaded jars).
-  # Mount the application source elsewhere to avoid mount conflicts/overwrites.
-  mainApplicationFile: "local:///opt/spark/app/kronodroid_transform_job.py"
-  deps:
-    packages:
-{packages_yaml}
+  # Job script is stored in MinIO and referenced via S3 URL
+  # This works around Spark Operator's inability to reliably pass volumeMounts to pods
+  mainApplicationFile: "{job_url}"
+  # NOTE: deps.packages is intentionally omitted - using spark.jars.packages in sparkConf instead
+  # to avoid the Spark Operator running spark-submit in the operator pod for dependency resolution.
   sparkConf:
 {spark_conf_yaml}
   restartPolicy:
@@ -240,9 +294,6 @@ spec:
     serviceAccount: {cfg.service_account}
     env:
 {env_yaml}
-    volumeMounts:
-      - name: job-src
-        mountPath: /opt/spark/app
   executor:
     instances: 2
     cores: 1
@@ -250,13 +301,6 @@ spec:
     serviceAccount: {cfg.service_account}
     env:
 {env_yaml}
-    volumeMounts:
-      - name: job-src
-        mountPath: /opt/spark/app
-  volumes:
-    - name: job-src
-      configMap:
-        name: {configmap}
 """
 
 
@@ -369,7 +413,7 @@ def _check_pod_status(namespace: str, application_name: str) -> dict:
 
 
 def run(cfg: KronodroidSparkOperatorConfig, *, application_name: Optional[str] = None) -> bool:
-    """Apply ConfigMap + SparkApplication and wait for completion."""
+    """Upload job script to MinIO, create SparkApplication, and wait for completion."""
     if _ensure_kubeconfig() is None:
         print("ERROR: No Kubernetes credentials detected.")
         print("Set KUBECONFIG (or ensure ~/.kube/config exists), or run inside a Kubernetes pod with a service account.")
@@ -377,8 +421,6 @@ def run(cfg: KronodroidSparkOperatorConfig, *, application_name: Optional[str] =
 
     if application_name is None:
         application_name = f"kronodroid-transform-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
-
-    configmap_name = f"{application_name}-job"
 
     print(f"\n📦 Creating SparkApplication: {application_name}")
     print(f"   Namespace: {cfg.namespace}")
@@ -395,15 +437,15 @@ def run(cfg: KronodroidSparkOperatorConfig, *, application_name: Optional[str] =
             print(f"   ⚠️  WARNING: Operator may not support Spark 3.5.x")
 
     try:
-        # Create ConfigMap with the job script
-        print(f"\n1️⃣  Creating ConfigMap: {configmap_name}")
-        cm_yaml = _render_configmap_yaml(configmap_name, cfg.namespace)
-        _run(["kubectl", "apply", "-f", "-"], input_text=cm_yaml)
-        print(f"   ✓ ConfigMap created")
+        # Upload job script to MinIO
+        # This works around Spark Operator's inability to reliably pass volumeMounts to pods
+        print(f"\n1️⃣  Uploading job script to MinIO")
+        job_url = _upload_job_to_minio(application_name, cfg)
+        print(f"   ✓ Job uploaded to: {job_url}")
 
         # Create SparkApplication
         print(f"\n2️⃣  Creating SparkApplication: {application_name}")
-        app_yaml = _render_sparkapplication_yaml(application_name, cfg, configmap_name)
+        app_yaml = _render_sparkapplication_yaml(application_name, cfg, job_url)
         _run(["kubectl", "apply", "-f", "-"], input_text=app_yaml)
         print(f"   ✓ SparkApplication created")
 
