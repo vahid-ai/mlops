@@ -1,3 +1,11 @@
+# Feast configuration with Spark offline store for LakeFS Iceberg tables
+# Alternative config with environment variable substitution for dynamic repository/branch
+#
+# Usage:
+#   export LAKEFS_REPOSITORY=kronodroid
+#   export LAKEFS_BRANCH=main
+#   feast -c feature_store_spark.yaml apply
+
 project: dfp
 provider: local
 
@@ -7,7 +15,7 @@ registry:
   cache_ttl_seconds: 60
 
 # Offline store using Spark with LakeFS Iceberg catalog
-# Tables located at: lakefs://kronodroid/main/iceberg/kronodroid/<table_name>
+# Tables located at: lakefs://${LAKEFS_REPOSITORY}/${LAKEFS_BRANCH}/iceberg/kronodroid/<table_name>
 offline_store:
   type: spark
   spark_conf:
@@ -16,15 +24,15 @@ offline_store:
     # LakeFS Iceberg catalog (Hadoop-based)
     spark.sql.catalog.lakefs: org.apache.iceberg.spark.SparkCatalog
     spark.sql.catalog.lakefs.type: hadoop
-    spark.sql.catalog.lakefs.warehouse: s3a://kronodroid/main/iceberg
+    spark.sql.catalog.lakefs.warehouse: s3a://${LAKEFS_REPOSITORY}/${LAKEFS_BRANCH}/iceberg
     # S3A filesystem for LakeFS S3 gateway
     spark.hadoop.fs.s3a.impl: org.apache.hadoop.fs.s3a.S3AFileSystem
     spark.hadoop.fs.s3a.path.style.access: "true"
     spark.hadoop.fs.s3a.connection.ssl.enabled: "false"
     # Per-bucket config for LakeFS repository
-    spark.hadoop.fs.s3a.bucket.kronodroid.endpoint: ${LAKEFS_ENDPOINT_URL}
-    spark.hadoop.fs.s3a.bucket.kronodroid.access.key: ${LAKEFS_ACCESS_KEY_ID}
-    spark.hadoop.fs.s3a.bucket.kronodroid.secret.key: ${LAKEFS_SECRET_ACCESS_KEY}
+    spark.hadoop.fs.s3a.bucket.${LAKEFS_REPOSITORY}.endpoint: ${LAKEFS_ENDPOINT_URL}
+    spark.hadoop.fs.s3a.bucket.${LAKEFS_REPOSITORY}.access.key: ${LAKEFS_ACCESS_KEY_ID}
+    spark.hadoop.fs.s3a.bucket.${LAKEFS_REPOSITORY}.secret.key: ${LAKEFS_SECRET_ACCESS_KEY}
     # Maven packages for Iceberg + S3A (Spark 4.0 compatible)
     spark.jars.packages: org.apache.iceberg:iceberg-spark-runtime-4.0_2.13:1.10.1,org.apache.iceberg:iceberg-aws:1.10.1,org.apache.hadoop:hadoop-aws:3.4.1,software.amazon.awssdk:bundle:2.29.51
 

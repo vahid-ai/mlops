@@ -31,13 +31,13 @@ resources:
     cores: 2
     instances: 2
 
-# Maven packages required for Iceberg + S3A + Avro
+# Maven packages required for Iceberg + S3A + Avro (Spark 4.0 compatible)
 packages:
-  - org.apache.iceberg:iceberg-spark-runtime-3.5_2.12:1.5.2
-  - org.apache.iceberg:iceberg-aws:1.5.2
-  - org.apache.iceberg:iceberg-avro:1.5.2
-  - org.apache.hadoop:hadoop-aws:3.3.4
-  - com.amazonaws:aws-java-sdk-bundle:1.12.262
+  - org.apache.iceberg:iceberg-spark-runtime-4.0_2.13:1.10.1
+  - org.apache.iceberg:iceberg-aws:1.10.1
+  - org.apache.iceberg:iceberg-avro:1.10.1
+  - org.apache.hadoop:hadoop-aws:3.4.1
+  - software.amazon.awssdk:bundle:2.29.51
 
 # Spark extensions
 extensions:

@@ -1,3 +1,13 @@
 project: dfp
 offline_store: spark
 online_store: redis
+
+# LakeFS Iceberg catalog configuration for Spark offline store
+# Tables located at: lakefs://kronodroid/main/iceberg/kronodroid/<table_name>
+lakefs_catalog:
+  name: lakefs
+  warehouse: s3a://kronodroid/main/iceberg
+  database: kronodroid
+  tables:
+    training: fct_training_dataset
+    families: dim_malware_families

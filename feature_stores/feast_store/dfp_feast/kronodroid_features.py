@@ -2,7 +2,6 @@
 
 import os
 from datetime import timedelta
-from pathlib import Path
 
 import pandas as pd
 
@@ -11,38 +10,37 @@ from feast import (
     Entity,
     Field,
     FeatureView,
-    FileSource,
     PushSource,
+)
+from feast.infra.offline_stores.contrib.spark_offline_store.spark_source import (
+    SparkSource,
 )
 from feast.on_demand_feature_view import on_demand_feature_view
 from feast.types import Float32, Float64, Int64, String
 
 from .entities import malware_family, malware_sample
 
-# Path to placeholder data (relative to this file)
-_DATA_DIR = Path(__file__).parent.parent / "data" / "placeholder"
+# LakeFS Iceberg catalog and table configuration
+# Tables located at: lakefs://kronodroid/main/iceberg/kronodroid/<table_name>
+LAKEFS_CATALOG = os.environ.get("LAKEFS_CATALOG", "lakefs")
+LAKEFS_DATABASE = os.environ.get("LAKEFS_DATABASE", "kronodroid")
 
-# File source for training dataset
-# In production, configure FEAST_TRAINING_DATA_PATH to point to actual S3/Iceberg location
-# Default uses local placeholder for development/testing
-kronodroid_training_source = FileSource(
+# Spark source for training dataset from LakeFS-tracked Iceberg table
+# Path: s3a://kronodroid/main/iceberg/kronodroid/fct_training_dataset
+kronodroid_training_source = SparkSource(
     name="kronodroid_training_source",
-    path=os.environ.get(
-        "FEAST_TRAINING_DATA_PATH",
-        str(_DATA_DIR / "training_dataset.parquet"),
-    ),
+    table=f"{LAKEFS_CATALOG}.{LAKEFS_DATABASE}.fct_training_dataset",
     timestamp_field="event_timestamp",
+    description="Training dataset from LakeFS-tracked Iceberg table",
 )
 
-# File source for family statistics
-# In production, configure FEAST_FAMILY_DATA_PATH to point to actual S3/Iceberg location
-kronodroid_family_source = FileSource(
+# Spark source for family statistics from LakeFS-tracked Iceberg table
+# Path: s3a://kronodroid/main/iceberg/kronodroid/dim_malware_families
+kronodroid_family_source = SparkSource(
     name="kronodroid_family_source",
-    path=os.environ.get(
-        "FEAST_FAMILY_DATA_PATH",
-        str(_DATA_DIR / "family_stats.parquet"),
-    ),
+    table=f"{LAKEFS_CATALOG}.{LAKEFS_DATABASE}.dim_malware_families",
     timestamp_field="_dbt_loaded_at",
+    description="Family statistics from LakeFS-tracked Iceberg table",
 )
 
 # Push source for real-time feature updates
