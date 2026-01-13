@@ -11,9 +11,10 @@ offline_store:
   type: file
 
 # Online store using Redis for low-latency serving
+# Set REDIS_CONNECTION_STRING environment variable to override
 online_store:
   type: redis
-  connection_string: ${REDIS_CONNECTION_STRING:-redis://localhost:16379}
+  connection_string: ${REDIS_CONNECTION_STRING}
 
 # Entity key serialization
 entity_key_serialization_version: 2

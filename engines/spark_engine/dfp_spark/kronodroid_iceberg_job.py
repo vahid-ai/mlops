@@ -240,7 +240,7 @@ def write_iceberg_table(
     table: str,
     mode: str = "overwrite",
 ) -> None:
-    """Write DataFrame as an Iceberg table with Parquet format.
+    """Write DataFrame as an Iceberg table with Avro format.
 
     Args:
         df: DataFrame to write
@@ -252,11 +252,11 @@ def write_iceberg_table(
     full_table_name = f"{catalog}.{database}.{table}"
     print(f"Writing Iceberg table: {full_table_name}")
 
-    # Write with Parquet format (default for Iceberg, avoids Avro classloader conflicts)
+    # Write with Avro format (matches repo defaults; enables consistent file type across jobs)
     df.writeTo(full_table_name).tableProperty(
-        "write.format.default", "parquet"
+        "write.format.default", "avro"
     ).tableProperty(
-        "write.parquet.compression-codec", "snappy"
+        "write.avro.compression-codec", "snappy"
     ).using("iceberg").createOrReplace()
 
     print(f"Successfully wrote {df.count()} rows to {full_table_name}")

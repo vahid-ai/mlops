@@ -1,6 +1,10 @@
 """Feast feature views for Kronodroid Android malware detection."""
 
+import os
 from datetime import timedelta
+from pathlib import Path
+
+import pandas as pd
 
 from feast import (
     BatchFeatureView,
@@ -15,20 +19,30 @@ from feast.types import Float32, Float64, Int64, String
 
 from .entities import malware_family, malware_sample
 
-# File source for training dataset (from dbt mart)
+# Path to placeholder data (relative to this file)
+_DATA_DIR = Path(__file__).parent.parent / "data" / "placeholder"
+
+# File source for training dataset
+# In production, configure FEAST_TRAINING_DATA_PATH to point to actual S3/Iceberg location
+# Default uses local placeholder for development/testing
 kronodroid_training_source = FileSource(
     name="kronodroid_training_source",
-    path="s3://dlt-data/kronodroid/fct_training_dataset/*.parquet",
+    path=os.environ.get(
+        "FEAST_TRAINING_DATA_PATH",
+        str(_DATA_DIR / "training_dataset.parquet"),
+    ),
     timestamp_field="event_timestamp",
-    s3_endpoint_override="http://localhost:19000",
 )
 
 # File source for family statistics
+# In production, configure FEAST_FAMILY_DATA_PATH to point to actual S3/Iceberg location
 kronodroid_family_source = FileSource(
     name="kronodroid_family_source",
-    path="s3://dlt-data/kronodroid/dim_malware_families/*.parquet",
+    path=os.environ.get(
+        "FEAST_FAMILY_DATA_PATH",
+        str(_DATA_DIR / "family_stats.parquet"),
+    ),
     timestamp_field="_dbt_loaded_at",
-    s3_endpoint_override="http://localhost:19000",
 )
 
 # Push source for real-time feature updates
@@ -111,28 +125,30 @@ malware_family_features = FeatureView(
         Field(name="is_high_activity", dtype=Int64),
     ],
 )
-def malware_derived_features(inputs: dict) -> dict:
+def malware_derived_features(inputs: pd.DataFrame) -> pd.DataFrame:
     """Compute derived features from base malware sample features."""
     import numpy as np
 
-    syscalls = [
-        inputs[f"syscall_{i}_normalized"]
+    # Get syscall columns that exist in the input DataFrame
+    syscall_cols = [
+        f"syscall_{i}_normalized"
         for i in range(1, 21)
-        if f"syscall_{i}_normalized" in inputs
+        if f"syscall_{i}_normalized" in inputs.columns
     ]
 
-    if syscalls:
-        variance = float(np.var(syscalls))
-        total = float(np.sum(syscalls))
-        is_high = 1 if total > 100 else 0
+    if syscall_cols:
+        syscall_data = inputs[syscall_cols].values
+        variance = np.var(syscall_data, axis=1)
+        total = np.sum(syscall_data, axis=1)
+        is_high = (total > 100).astype(int)
     else:
-        variance = 0.0
-        is_high = 0
+        variance = np.zeros(len(inputs))
+        is_high = np.zeros(len(inputs), dtype=int)
 
-    return {
+    return pd.DataFrame({
         "syscall_variance": variance,
         "is_high_activity": is_high,
-    }
+    })
 
 
 # Batch feature view for offline training

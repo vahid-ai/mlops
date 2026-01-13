@@ -120,10 +120,13 @@ spec:
     packages:
       - org.apache.iceberg:iceberg-spark-runtime-3.5_2.12:1.5.2
       - org.apache.iceberg:iceberg-aws:1.5.2
+      - org.apache.iceberg:iceberg-avro:1.5.2
       - org.apache.hadoop:hadoop-aws:3.3.4
       - com.amazonaws:aws-java-sdk-bundle:1.12.262
   sparkConf:
     spark.sql.extensions: org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions
+    spark.sql.iceberg.write.format.default: avro
+    spark.sql.iceberg.write.avro.compression-codec: snappy
     spark.sql.catalog.lakefs: org.apache.iceberg.spark.SparkCatalog
     spark.sql.catalog.lakefs.catalog-impl: org.apache.iceberg.rest.RESTCatalog
     spark.sql.catalog.lakefs.uri: "{lakefs_iceberg_rest_uri}"
@@ -494,10 +497,13 @@ spec:
     packages:
       - org.apache.iceberg:iceberg-spark-runtime-3.5_2.12:1.5.2
       - org.apache.iceberg:iceberg-aws:1.5.2
+      - org.apache.iceberg:iceberg-avro:1.5.2
       - org.apache.hadoop:hadoop-aws:3.3.4
       - com.amazonaws:aws-java-sdk-bundle:1.12.262
   sparkConf:
     spark.sql.extensions: org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions
+    spark.sql.iceberg.write.format.default: avro
+    spark.sql.iceberg.write.avro.compression-codec: snappy
     spark.sql.catalog.{catalog_name}: org.apache.iceberg.spark.SparkCatalog
     spark.sql.catalog.{catalog_name}.catalog-impl: org.apache.iceberg.rest.RESTCatalog
     spark.sql.catalog.{catalog_name}.uri: "{iceberg_rest_uri}"
