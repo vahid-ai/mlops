@@ -19,7 +19,7 @@ Usage:
 import argparse
 import os
 import sys
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, List
 
 from pyspark.sql import SparkSession, DataFrame
 from pyspark.sql import functions as F
@@ -72,27 +72,35 @@ def get_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def read_raw_parquet(
+def read_raw_data(
     spark: SparkSession,
     minio_bucket: str,
     prefix: str,
     table_name: str,
 ) -> DataFrame:
-    """Read raw Parquet files from MinIO.
+    """Read raw data files from storage (supports JSONL and Parquet).
 
     Args:
         spark: SparkSession instance
         minio_bucket: MinIO bucket name
         prefix: Path prefix (e.g., kronodroid_raw)
-        table_name: Table name (emulator or real_device)
+        table_name: Table name as written by dlt
 
     Returns:
         DataFrame with raw data
     """
-    # dlt writes Parquet files to bucket/dataset_name/table_name/*.parquet
-    path = f"s3a://{minio_bucket}/{prefix}/{table_name}/*.parquet"
-    print(f"Reading from: {path}")
-    return spark.read.parquet(path)
+    # dlt writes data to bucket/dataset_name/table_name/*
+    # Try JSONL first (dlt default), fall back to Parquet
+    jsonl_path = f"s3a://{minio_bucket}/{prefix}/{table_name}/*.jsonl.gz"
+    parquet_path = f"s3a://{minio_bucket}/{prefix}/{table_name}/*.parquet"
+
+    print(f"Attempting to read from: {jsonl_path}")
+    try:
+        return spark.read.json(jsonl_path)
+    except Exception as e:
+        print(f"JSONL read failed: {e}")
+        print(f"Falling back to Parquet: {parquet_path}")
+        return spark.read.parquet(parquet_path)
 
 
 def create_stg_emulator(raw_df: DataFrame) -> DataFrame:
@@ -232,7 +240,7 @@ def write_iceberg_table(
     table: str,
     mode: str = "overwrite",
 ) -> None:
-    """Write DataFrame as an Iceberg table with Avro format.
+    """Write DataFrame as an Iceberg table with Parquet format.
 
     Args:
         df: DataFrame to write
@@ -244,17 +252,17 @@ def write_iceberg_table(
     full_table_name = f"{catalog}.{database}.{table}"
     print(f"Writing Iceberg table: {full_table_name}")
 
-    # Write with Avro format and create table if not exists
+    # Write with Parquet format (default for Iceberg, avoids Avro classloader conflicts)
     df.writeTo(full_table_name).tableProperty(
-        "write.format.default", "avro"
+        "write.format.default", "parquet"
     ).tableProperty(
-        "write.avro.compression-codec", "snappy"
+        "write.parquet.compression-codec", "snappy"
     ).using("iceberg").createOrReplace()
 
     print(f"Successfully wrote {df.count()} rows to {full_table_name}")
 
 
-def ensure_databases(spark: SparkSession, catalog: str, databases: list[str]) -> None:
+def ensure_databases(spark: SparkSession, catalog: str, databases: List[str]) -> None:
     """Ensure Iceberg databases exist.
 
     Args:
@@ -295,16 +303,17 @@ def main() -> int:
             [args.staging_database, args.marts_database],
         )
 
-        # Step 1: Read raw Parquet from MinIO
+        # Step 1: Read raw data from storage
+        # dlt uses these table names from the Kronodroid Kaggle dataset
         print("\n[1/7] Reading raw emulator data...")
-        raw_emulator = read_raw_parquet(
-            spark, args.minio_bucket, args.minio_prefix, "emulator"
+        raw_emulator = read_raw_data(
+            spark, args.minio_bucket, args.minio_prefix, "kronodroid_2021_emu_v1"
         )
         print(f"  Rows: {raw_emulator.count()}")
 
         print("\n[2/7] Reading raw real_device data...")
-        raw_real_device = read_raw_parquet(
-            spark, args.minio_bucket, args.minio_prefix, "real_device"
+        raw_real_device = read_raw_data(
+            spark, args.minio_bucket, args.minio_prefix, "kronodroid_2021_real_v1"
         )
         print(f"  Rows: {raw_real_device.count()}")
 

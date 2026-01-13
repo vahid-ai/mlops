@@ -38,7 +38,7 @@ import uuid
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Literal
-from urllib.parse import quote
+from urllib.parse import quote, urlparse
 
 # Add project root to path
 PROJECT_ROOT = Path(__file__).parent.parent.parent
@@ -51,6 +51,167 @@ TransformEngine = Literal["dbt", "kubeflow"]
 def _lakefs_quote_ref(ref: str) -> str:
     """URL-encode a LakeFS ref (branch/commit/tag) for use in path segments."""
     return quote(ref, safe="")
+
+
+def _is_localhost_url(url: str) -> bool:
+    try:
+        parsed = urlparse(url)
+    except Exception:
+        return False
+    return parsed.hostname in {"localhost", "127.0.0.1"} if parsed.hostname else False
+
+
+def _k8s_service_url(service: str, namespace: str, port: int) -> str:
+    return f"http://{service}.{namespace}.svc.cluster.local:{port}"
+
+
+def _ensure_k8s_prereqs(
+    namespace: str,
+    service_account: str,
+    minio_secret_name: str,
+    lakefs_secret_name: str,
+) -> None:
+    """Ensure K8s objects needed by Spark-on-K8s exist."""
+    from kubernetes import client, config
+    from kubernetes.client.rest import ApiException
+
+    # Configure Kubernetes client (works both in-cluster and from local kubeconfig).
+    try:
+        config.load_incluster_config()
+    except config.ConfigException:
+        config.load_kube_config()
+
+    core_api = client.CoreV1Api()
+    rbac_api = client.RbacAuthorizationV1Api()
+
+    # ServiceAccount
+    try:
+        core_api.read_namespaced_service_account(service_account, namespace)
+    except ApiException as e:
+        if e.status != 404:
+            raise
+        core_api.create_namespaced_service_account(
+            namespace,
+            client.V1ServiceAccount(metadata=client.V1ObjectMeta(name=service_account)),
+        )
+
+    # Role (minimal Spark driver permissions)
+    role_name = "spark-role"
+    role_rules = [
+        client.V1PolicyRule(
+            api_groups=[""],
+            resources=["pods"],
+            verbs=["get", "list", "watch", "create", "delete", "deletecollection", "patch"],
+        ),
+        client.V1PolicyRule(
+            api_groups=[""],
+            resources=["services"],
+            verbs=["get", "list", "watch", "create", "delete", "deletecollection"],
+        ),
+        client.V1PolicyRule(
+            api_groups=[""],
+            resources=["configmaps"],
+            verbs=["get", "list", "watch", "create", "delete", "deletecollection", "update"],
+        ),
+        client.V1PolicyRule(
+            api_groups=[""],
+            resources=["secrets"],
+            verbs=["get", "list", "watch"],
+        ),
+        client.V1PolicyRule(
+            api_groups=[""],
+            resources=["persistentvolumeclaims"],
+            verbs=["get", "list", "watch", "create", "delete", "deletecollection"],
+        ),
+    ]
+    try:
+        rbac_api.read_namespaced_role(role_name, namespace)
+    except ApiException as e:
+        if e.status != 404:
+            raise
+        rbac_api.create_namespaced_role(
+            namespace,
+            client.V1Role(
+                metadata=client.V1ObjectMeta(name=role_name),
+                rules=role_rules,
+            ),
+        )
+
+    # RoleBinding
+    rb_name = "spark-rolebinding"
+    try:
+        rbac_api.read_namespaced_role_binding(rb_name, namespace)
+    except ApiException as e:
+        if e.status != 404:
+            raise
+        rbac_api.create_namespaced_role_binding(
+            namespace,
+            client.V1RoleBinding(
+                metadata=client.V1ObjectMeta(name=rb_name),
+                role_ref=client.V1RoleRef(
+                    api_group="rbac.authorization.k8s.io",
+                    kind="Role",
+                    name=role_name,
+                ),
+                subjects=[
+                    client.RbacV1Subject(
+                        kind="ServiceAccount",
+                        name=service_account,
+                        namespace=namespace,
+                    )
+                ],
+            ),
+        )
+
+    def _ensure_secret(secret_name: str, data: dict[str, str]) -> None:
+        try:
+            core_api.read_namespaced_secret(secret_name, namespace)
+        except ApiException as e:
+            if e.status != 404:
+                raise
+            core_api.create_namespaced_secret(
+                namespace,
+                client.V1Secret(
+                    metadata=client.V1ObjectMeta(name=secret_name),
+                    type="Opaque",
+                    string_data={k: v for k, v in data.items() if v},
+                ),
+            )
+
+    _ensure_secret(
+        minio_secret_name,
+        {
+            "MINIO_ACCESS_KEY_ID": os.getenv("MINIO_ACCESS_KEY_ID", ""),
+            "MINIO_SECRET_ACCESS_KEY": os.getenv("MINIO_SECRET_ACCESS_KEY", ""),
+        },
+    )
+    _ensure_secret(
+        lakefs_secret_name,
+        {
+            "LAKEFS_ACCESS_KEY_ID": os.getenv("LAKEFS_ACCESS_KEY_ID", ""),
+            "LAKEFS_SECRET_ACCESS_KEY": os.getenv("LAKEFS_SECRET_ACCESS_KEY", ""),
+        },
+    )
+
+
+def _sparkoperator_crd_supports_status() -> bool:
+    """Return True if the SparkApplication CRD defines the /status subresource."""
+    try:
+        from kubernetes import client
+        from kubernetes.client.rest import ApiException
+    except Exception:
+        return False
+
+    api = client.ApiextensionsV1Api()
+    try:
+        crd = api.read_custom_resource_definition("sparkapplications.sparkoperator.k8s.io")
+    except ApiException:
+        return False
+
+    for version in crd.spec.versions or []:
+        if version.name == "v1beta2" and version.subresources and version.subresources.status is not None:
+            return True
+    return False
 
 
 def load_env_file(env_path: Path = PROJECT_ROOT / ".env"):
@@ -213,12 +374,13 @@ def run_dbt_transformations(target: str = "dev") -> bool:
 
 
 def run_kubeflow_transformations(
+    destination: str = "lakefs",
     lakefs_branch: str = "main",
     minio_endpoint: str | None = None,
     minio_bucket: str | None = None,
     lakefs_endpoint: str | None = None,
     lakefs_repository: str | None = None,
-    spark_image: str = "apache/spark:3.5.0-python3",
+    spark_image: str = "dfp-spark:latest",
     namespace: str = "default",
     service_account: str = "spark",
     minio_secret_name: str = "minio-credentials",
@@ -272,19 +434,55 @@ def run_kubeflow_transformations(
     lakefs_endpoint = lakefs_endpoint or os.getenv("LAKEFS_ENDPOINT_URL", "http://lakefs:8000")
     lakefs_repository = lakefs_repository or os.getenv("LAKEFS_REPOSITORY", "kronodroid")
 
-    print(f"  MinIO endpoint: {minio_endpoint}")
+    # Preserve host-accessible endpoints for LakeFS API calls (branch/commit/merge).
+    lakefs_api_endpoint = lakefs_endpoint
+
+    # Spark runs inside the cluster, so rewrite localhost endpoints to in-cluster Service DNS.
+    minio_cluster_endpoint = (
+        _k8s_service_url("minio", namespace, 9000) if _is_localhost_url(minio_endpoint) else minio_endpoint
+    )
+    lakefs_cluster_endpoint = (
+        _k8s_service_url("lakefs", namespace, 8000) if _is_localhost_url(lakefs_endpoint) else lakefs_endpoint
+    )
+
+    # For `--destination lakefs`, dlt writes raw data to the LakeFS S3 gateway bucket
+    # (the repository name), not the MinIO raw bucket. Use that as the Spark input.
+    if destination == "lakefs":
+        raw_bucket = lakefs_repository
+        raw_endpoint = lakefs_cluster_endpoint
+        raw_prefix = f"{lakefs_branch}/kronodroid_raw"
+    else:
+        raw_bucket = minio_bucket
+        raw_endpoint = minio_cluster_endpoint
+        raw_prefix = "kronodroid_raw"
+
+    print(f"  MinIO endpoint (host): {minio_endpoint}")
+    print(f"  MinIO endpoint (cluster): {minio_cluster_endpoint}")
     print(f"  MinIO bucket: {minio_bucket}")
-    print(f"  LakeFS endpoint: {lakefs_endpoint}")
+    print(f"  LakeFS endpoint (host): {lakefs_endpoint}")
+    print(f"  LakeFS endpoint (cluster): {lakefs_cluster_endpoint}")
     print(f"  LakeFS repository: {lakefs_repository}")
     print(f"  LakeFS branch: {lakefs_branch}")
+    print(f"  Raw input endpoint: {raw_endpoint}")
+    print(f"  Raw input bucket: {raw_bucket}")
+    print(f"  Raw input prefix: {raw_prefix}")
     print(f"  Transform engine: Kubeflow SparkOperator")
+
+    # Ensure K8s objects exist before submitting (SA/RBAC/Secrets).
+    _ensure_k8s_prereqs(
+        namespace=namespace,
+        service_account=service_account,
+        minio_secret_name=minio_secret_name,
+        lakefs_secret_name=lakefs_secret_name,
+    )
 
     if use_kfp_client:
         return _run_kubeflow_via_kfp_client(
             kfp_host=kfp_host,
-            minio_endpoint=minio_endpoint,
+            minio_endpoint=minio_cluster_endpoint,
             minio_bucket=minio_bucket,
-            lakefs_endpoint=lakefs_endpoint,
+            minio_prefix=raw_prefix,
+            lakefs_endpoint=lakefs_cluster_endpoint,
             lakefs_repository=lakefs_repository,
             lakefs_branch=lakefs_branch,
             spark_image=spark_image,
@@ -301,11 +499,16 @@ def run_kubeflow_transformations(
         )
     else:
         return _run_kubeflow_via_sparkapplication(
-            minio_endpoint=minio_endpoint,
+            destination=destination,
+            minio_endpoint=minio_cluster_endpoint,
             minio_bucket=minio_bucket,
-            lakefs_endpoint=lakefs_endpoint,
+            lakefs_endpoint=lakefs_cluster_endpoint,
+            lakefs_api_endpoint=lakefs_api_endpoint,
             lakefs_repository=lakefs_repository,
             lakefs_branch=lakefs_branch,
+            raw_endpoint=raw_endpoint,
+            raw_bucket=raw_bucket,
+            raw_prefix=raw_prefix,
             spark_image=spark_image,
             namespace=namespace,
             service_account=service_account,
@@ -324,6 +527,7 @@ def _run_kubeflow_via_kfp_client(
     kfp_host: str | None,
     minio_endpoint: str,
     minio_bucket: str,
+    minio_prefix: str,
     lakefs_endpoint: str,
     lakefs_repository: str,
     lakefs_branch: str,
@@ -363,7 +567,7 @@ def _run_kubeflow_via_kfp_client(
             arguments={
                 "minio_endpoint": minio_endpoint,
                 "minio_bucket": minio_bucket,
-                "minio_prefix": "kronodroid_raw",
+                "minio_prefix": minio_prefix,
                 "minio_secret_name": minio_secret_name,
                 "lakefs_endpoint": lakefs_endpoint,
                 "lakefs_repository": lakefs_repository,
@@ -399,11 +603,16 @@ def _run_kubeflow_via_kfp_client(
 
 
 def _run_kubeflow_via_sparkapplication(
+    destination: str,
     minio_endpoint: str,
     minio_bucket: str,
     lakefs_endpoint: str,
+    lakefs_api_endpoint: str,
     lakefs_repository: str,
     lakefs_branch: str,
+    raw_endpoint: str,
+    raw_bucket: str,
+    raw_prefix: str,
     spark_image: str,
     namespace: str,
     service_account: str,
@@ -419,7 +628,7 @@ def _run_kubeflow_via_sparkapplication(
     """Submit a SparkApplication directly via kubectl."""
     try:
         from kubernetes import client, config
-        import yaml
+        from kubernetes.client.rest import ApiException
     except ImportError as e:
         print(f"ERROR: kubernetes client not installed: {e}")
         print("Install with: pip install kubernetes")
@@ -434,12 +643,25 @@ def _run_kubeflow_via_sparkapplication(
     print(f"  Per-run branch: {per_run_branch}")
 
     # Create per-run LakeFS branch
-    if not _create_lakefs_branch(lakefs_endpoint, lakefs_repository, per_run_branch, lakefs_branch):
+    if not _create_lakefs_branch(lakefs_api_endpoint, lakefs_repository, per_run_branch, lakefs_branch):
         return False
 
     # Build SparkApplication manifest
-    iceberg_rest_uri = f"{lakefs_endpoint.rstrip('/')}/api/v1/iceberg"
+    # Use Hadoop-based Iceberg catalog since LakeFS OSS doesn't include REST catalog
     catalog_name = "lakefs"
+    warehouse_path = f"s3a://{lakefs_repository}/{per_run_branch}/iceberg"
+
+    minio_access_key = os.getenv("MINIO_ACCESS_KEY_ID", "")
+    minio_secret_key = os.getenv("MINIO_SECRET_ACCESS_KEY", "")
+    lakefs_access_key = os.getenv("LAKEFS_ACCESS_KEY_ID", "")
+    lakefs_secret_key = os.getenv("LAKEFS_SECRET_ACCESS_KEY", "")
+
+    if destination == "minio" and (not minio_access_key or not minio_secret_key):
+        print("ERROR: MINIO_ACCESS_KEY_ID / MINIO_SECRET_ACCESS_KEY must be set for MinIO input.")
+        return False
+    if not lakefs_access_key or not lakefs_secret_key:
+        print("ERROR: LAKEFS_ACCESS_KEY_ID / LAKEFS_SECRET_ACCESS_KEY must be set for LakeFS output.")
+        return False
 
     spark_app = {
         "apiVersion": "sparkoperator.k8s.io/v1beta2",
@@ -453,11 +675,11 @@ def _run_kubeflow_via_sparkapplication(
             "pythonVersion": "3",
             "mode": "cluster",
             "image": spark_image,
-            "imagePullPolicy": "Always",
-            "mainApplicationFile": "local:///opt/spark/jobs/kronodroid_iceberg_job.py",
+            "imagePullPolicy": "IfNotPresent",
+            "mainApplicationFile": "local:///opt/spark/work-dir/kronodroid_iceberg_job.py",
             "arguments": [
-                "--minio-bucket", minio_bucket,
-                "--minio-prefix", "kronodroid_raw",
+                "--minio-bucket", raw_bucket,
+                "--minio-prefix", raw_prefix,
                 "--lakefs-repository", lakefs_repository,
                 "--lakefs-branch", per_run_branch,
                 "--catalog-name", catalog_name,
@@ -475,10 +697,11 @@ def _run_kubeflow_via_sparkapplication(
                     {"secretRef": {"name": lakefs_secret_name}},
                 ],
                 "env": [
-                    {"name": "MINIO_ENDPOINT_URL", "value": minio_endpoint},
+                    {"name": "MINIO_ENDPOINT_URL", "value": raw_endpoint},
                     {"name": "LAKEFS_ENDPOINT_URL", "value": lakefs_endpoint},
                     {"name": "LAKEFS_REPOSITORY", "value": lakefs_repository},
                     {"name": "LAKEFS_BRANCH", "value": per_run_branch},
+                    {"name": "AWS_REGION", "value": os.getenv("MINIO_REGION", "us-east-1")},
                 ],
             },
             "executor": {
@@ -490,34 +713,40 @@ def _run_kubeflow_via_sparkapplication(
                     {"secretRef": {"name": lakefs_secret_name}},
                 ],
                 "env": [
-                    {"name": "MINIO_ENDPOINT_URL", "value": minio_endpoint},
+                    {"name": "MINIO_ENDPOINT_URL", "value": raw_endpoint},
                     {"name": "LAKEFS_ENDPOINT_URL", "value": lakefs_endpoint},
                     {"name": "LAKEFS_REPOSITORY", "value": lakefs_repository},
                     {"name": "LAKEFS_BRANCH", "value": per_run_branch},
+                    {"name": "AWS_REGION", "value": os.getenv("MINIO_REGION", "us-east-1")},
                 ],
             },
-            "deps": {
-                "packages": [
-                    "org.apache.iceberg:iceberg-spark-runtime-3.5_2.12:1.5.2",
-                    "org.apache.iceberg:iceberg-aws:1.5.2",
-                    "org.apache.hadoop:hadoop-aws:3.3.4",
-                    "com.amazonaws:aws-java-sdk-bundle:1.12.262",
-                ],
-            },
+            # Note: deps.packages removed - JARs are pre-built into the Docker image
+            # to avoid version mismatches between driver and executor pods
             "sparkConf": {
                 "spark.sql.extensions": "org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions",
                 f"spark.sql.catalog.{catalog_name}": "org.apache.iceberg.spark.SparkCatalog",
-                f"spark.sql.catalog.{catalog_name}.catalog-impl": "org.apache.iceberg.rest.RESTCatalog",
-                f"spark.sql.catalog.{catalog_name}.uri": iceberg_rest_uri,
-                f"spark.sql.catalog.{catalog_name}.warehouse": f"s3a://{lakefs_repository}/{per_run_branch}/iceberg",
+                f"spark.sql.catalog.{catalog_name}.type": "hadoop",
+                f"spark.sql.catalog.{catalog_name}.warehouse": warehouse_path,
                 "spark.hadoop.fs.s3a.impl": "org.apache.hadoop.fs.s3a.S3AFileSystem",
                 "spark.hadoop.fs.s3a.path.style.access": "true",
                 "spark.hadoop.fs.s3a.connection.ssl.enabled": "false",
-                f"spark.hadoop.fs.s3a.bucket.{minio_bucket}.endpoint": minio_endpoint,
+                # Raw input bucket endpoint (+ optional per-bucket creds).
+                f"spark.hadoop.fs.s3a.bucket.{raw_bucket}.endpoint": raw_endpoint,
+                # LakeFS repo endpoint (+ per-bucket creds for Iceberg warehouse).
                 f"spark.hadoop.fs.s3a.bucket.{lakefs_repository}.endpoint": lakefs_endpoint,
+                f"spark.hadoop.fs.s3a.bucket.{lakefs_repository}.access.key": lakefs_access_key,
+                f"spark.hadoop.fs.s3a.bucket.{lakefs_repository}.secret.key": lakefs_secret_key,
             },
         },
     }
+
+    if destination == "minio":
+        spark_app["spec"]["sparkConf"].update(
+            {
+                f"spark.hadoop.fs.s3a.bucket.{raw_bucket}.access.key": minio_access_key,
+                f"spark.hadoop.fs.s3a.bucket.{raw_bucket}.secret.key": minio_secret_key,
+            }
+        )
 
     try:
         # Load kubeconfig
@@ -527,6 +756,13 @@ def _run_kubeflow_via_sparkapplication(
             config.load_kube_config()
 
         api = client.CustomObjectsApi()
+        core_api = client.CoreV1Api()
+        crd_supports_status = _sparkoperator_crd_supports_status()
+        if not crd_supports_status:
+            print(
+                "  Note: SparkApplication CRD has no /status subresource; "
+                "SparkOperator can't report application state. Monitoring driver pod instead."
+            )
 
         # Submit SparkApplication
         try:
@@ -579,13 +815,60 @@ def _run_kubeflow_via_sparkapplication(
                 )
 
                 status = app.get("status", {})
-                app_state = status.get("applicationState", {}).get("state", "UNKNOWN")
+                app_state = status.get("applicationState", {}).get("state")
+
+                if not app_state:
+                    driver_pod_name = f"{app_name}-driver"
+                    try:
+                        pod = core_api.read_namespaced_pod(driver_pod_name, namespace)
+                        phase = pod.status.phase or "UNKNOWN"
+                        waiting_reason = None
+                        waiting_message = None
+                        for container_status in pod.status.container_statuses or []:
+                            state = container_status.state
+                            waiting = state.waiting if state else None
+                            if waiting and waiting.reason:
+                                waiting_reason = waiting.reason
+                                waiting_message = waiting.message
+                                break
+
+                        if phase == "Pending" and waiting_reason in ("ErrImagePull", "ImagePullBackOff"):
+                            app_state = waiting_reason
+                            print(f"ERROR: Spark driver image pull failed: {waiting_reason}")
+                            if waiting_message:
+                                print(f"  {waiting_message}")
+                            print("  If using kind, build and load the image:")
+                            print("    docker build -t dfp-spark:latest -f tools/docker/Dockerfile.spark .")
+                            print("    kind load docker-image dfp-spark:latest --name dfp-kind")
+                            return False
+
+                        if phase == "Pending" and waiting_reason == "CreateContainerConfigError":
+                            app_state = waiting_reason
+                            print("ERROR: Spark driver failed to start (CreateContainerConfigError).")
+                            print(f"  Check secrets in namespace {namespace}: {minio_secret_name}, {lakefs_secret_name}")
+                            return False
+
+                        if phase == "Succeeded":
+                            app_state = "COMPLETED"
+                        elif phase == "Failed":
+                            app_state = "FAILED"
+                        elif phase == "Running":
+                            app_state = "RUNNING"
+                        elif phase == "Pending":
+                            app_state = "PENDING"
+                        else:
+                            app_state = phase
+                    except ApiException as e:
+                        if e.status == 404:
+                            app_state = "SUBMITTED"
+                        else:
+                            raise
                 print(f"  SparkApplication state: {app_state} (elapsed: {int(elapsed)}s)")
 
                 if app_state == "COMPLETED":
                     # Commit and merge the per-run branch
                     if _commit_and_merge_lakefs(
-                        lakefs_endpoint, lakefs_repository, per_run_branch, lakefs_branch, run_id
+                        lakefs_api_endpoint, lakefs_repository, per_run_branch, lakefs_branch, run_id
                     ):
                         print("Kubeflow SparkOperator transformations completed successfully")
                         return True
@@ -595,7 +878,11 @@ def _run_kubeflow_via_sparkapplication(
 
                 elif app_state in ("FAILED", "SUBMISSION_FAILED", "FAILING"):
                     error_msg = status.get("applicationState", {}).get("errorMessage", "Unknown")
-                    print(f"ERROR: SparkApplication failed: {error_msg}")
+                    if error_msg and error_msg != "Unknown":
+                        print(f"ERROR: SparkApplication failed: {error_msg}")
+                    else:
+                        print("ERROR: SparkApplication failed (no operator status available).")
+                        print(f"  Check driver pod: kubectl -n {namespace} describe pod {app_name}-driver")
                     return False
 
             except client.ApiException as e:
@@ -876,12 +1163,12 @@ def main():
     )
     parser.add_argument(
         "--spark-image",
-        default="apache/spark:3.5.0-python3",
+        default="dfp-spark:latest",
         help="Spark Docker image (for kubeflow engine)",
     )
     parser.add_argument(
         "--k8s-namespace",
-        default="default",
+        default="dfp",
         help="Kubernetes namespace for Spark jobs",
     )
     parser.add_argument(
@@ -965,6 +1252,7 @@ def main():
                     sys.exit(1)
             elif transform_engine == "kubeflow":
                 if not run_kubeflow_transformations(
+                    destination=args.destination,
                     lakefs_branch=args.branch,
                     spark_image=args.spark_image,
                     namespace=args.k8s_namespace,

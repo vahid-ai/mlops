@@ -58,6 +58,11 @@ python tools/scripts/run_kronodroid_pipeline.py --destination minio
 # With LakeFS versioning
 python tools/scripts/run_kronodroid_pipeline.py --destination lakefs --branch dev
 
+# SparkOperator (kind): build & load the Spark image, then run the kubeflow transform engine
+docker build -t dfp-spark:latest -f tools/docker/Dockerfile.spark .
+kind load docker-image dfp-spark:latest --name dfp-kind
+python tools/scripts/run_kronodroid_pipeline.py --destination lakefs --transform-engine kubeflow --k8s-namespace dfp
+
 # Skip ingestion (if data already loaded)
 python tools/scripts/run_kronodroid_pipeline.py --skip-ingestion
 
