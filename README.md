@@ -46,7 +46,8 @@ The Kronodroid Android malware detection dataset can be ingested from Kaggle and
 ### Prerequisites
 1. Start the kind cluster with `task up`
 2. Ensure you have a Kaggle API token in `.env` as `KAGGLE_API_TOKEN`
-3. Install Python dependencies: `uv pip install -e .`
+3. Install Python dependencies: `uv sync`
+4. For `--destination lakefs`, the default LakeFS storage namespace uses the MinIO bucket `lakefs-data` (override via `LAKEFS_STORAGE_BUCKET`).
 
 ### Running the Pipeline
 

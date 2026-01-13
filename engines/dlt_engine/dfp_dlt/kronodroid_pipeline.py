@@ -88,7 +88,7 @@ def run_kronodroid_to_parquet(
 
     import pandas as pd
 
-    from .kaggle_compat import patch_kagglesdk_user_agent
+    from .kaggle_compat import patch_all as patch_kagglesdk
 
     output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
@@ -96,7 +96,7 @@ def run_kronodroid_to_parquet(
     if kaggle_token:
         os.environ["KAGGLE_API_TOKEN"] = kaggle_token
 
-    patch_kagglesdk_user_agent()
+    patch_kagglesdk()
     import kaggle  # type: ignore[import-not-found]
 
     with tempfile.TemporaryDirectory() as tmpdir:

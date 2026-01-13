@@ -1,0 +1,111 @@
+# RBAC configuration for Spark jobs
+# This creates the ServiceAccount, Role, and RoleBinding needed to run SparkApplications
+
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: spark
+  namespace: default
+  labels:
+    app.kubernetes.io/name: spark
+    app.kubernetes.io/component: spark-sa
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: spark-role
+  namespace: default
+  labels:
+    app.kubernetes.io/name: spark
+    app.kubernetes.io/component: spark-rbac
+rules:
+  # Pods - for driver to create/monitor executor pods
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch", "create", "delete", "patch"]
+  
+  # Pod logs - for debugging
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get", "list"]
+  
+  # Services - for driver to create headless services
+  - apiGroups: [""]
+    resources: ["services"]
+    verbs: ["get", "list", "watch", "create", "delete"]
+  
+  # ConfigMaps - for Spark configuration
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get", "list", "watch", "create", "delete", "patch"]
+  
+  # Secrets - for accessing credentials
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get", "list", "watch"]
+  
+  # PersistentVolumeClaims - for shuffle/checkpoint storage
+  - apiGroups: [""]
+    resources: ["persistentvolumeclaims"]
+    verbs: ["get", "list", "watch", "create", "delete"]
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: spark-role-binding
+  namespace: default
+  labels:
+    app.kubernetes.io/name: spark
+    app.kubernetes.io/component: spark-rbac
+subjects:
+  - kind: ServiceAccount
+    name: spark
+    namespace: default
+roleRef:
+  kind: Role
+  name: spark-role
+  apiGroup: rbac.authorization.k8s.io
+
+---
+# ClusterRole for Kubeflow Pipelines to submit SparkApplications
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: sparkapplication-submitter
+  labels:
+    app.kubernetes.io/name: spark
+    app.kubernetes.io/component: kfp-rbac
+rules:
+  - apiGroups: ["sparkoperator.k8s.io"]
+    resources: ["sparkapplications", "sparkapplications/status"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["sparkoperator.k8s.io"]
+    resources: ["scheduledsparkapplications", "scheduledsparkapplications/status"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+
+---
+# Bind to the default ServiceAccount in kubeflow namespace (used by KFP)
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: kfp-sparkapplication-submitter
+  labels:
+    app.kubernetes.io/name: spark
+    app.kubernetes.io/component: kfp-rbac
+subjects:
+  - kind: ServiceAccount
+    name: default-editor
+    namespace: kubeflow
+  - kind: ServiceAccount
+    name: pipeline-runner
+    namespace: kubeflow
+  - kind: ServiceAccount
+    name: default
+    namespace: default
+roleRef:
+  kind: ClusterRole
+  name: sparkapplication-submitter
+  apiGroup: rbac.authorization.k8s.io

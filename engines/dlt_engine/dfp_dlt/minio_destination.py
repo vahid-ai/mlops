@@ -77,6 +77,8 @@ def get_minio_destination(config: MinioConfig | None = None) -> Any:
             "endpoint_url": config.endpoint_url,
             "region_name": config.region,
         },
+        # MinIO generally requires path-style addressing.
+        config_kwargs={"s3": {"addressing_style": "path"}},
     )
 
 
@@ -99,6 +101,8 @@ def get_lakefs_destination(config: LakeFSConfig | None = None) -> Any:
             "aws_secret_access_key": config.secret_access_key,
             "endpoint_url": config.endpoint_url,
         },
+        # LakeFS S3 gateway is S3-compatible but works most reliably with path-style addressing.
+        config_kwargs={"s3": {"addressing_style": "path"}},
     )
 
 
@@ -143,6 +147,25 @@ def ensure_lakefs_repository(config: LakeFSConfig | None = None) -> None:
     if config is None:
         config = LakeFSConfig.from_env()
 
+    # LakeFS repositories typically point at an S3 bucket/prefix via `storage_namespace`.
+    # In the local Kind setup, LakeFS uses MinIO as the blockstore backend, and the backing
+    # bucket may not exist yet. If it doesn't, S3 writes via the LakeFS gateway fail with:
+    #   "We encountered an internal error, please try again."
+    #
+    # Create the bucket up-front so downstream dlt loads can succeed.
+    minio_endpoint_url = os.getenv("MINIO_ENDPOINT_URL")
+    if minio_endpoint_url:
+        try:
+            # Keep this in sync with the default `storage_namespace` used below.
+            backing_bucket = os.getenv("LAKEFS_STORAGE_BUCKET", "lakefs-data")
+            minio_config = MinioConfig.from_env()
+            minio_config.bucket_name = backing_bucket
+            ensure_minio_bucket(minio_config)
+        except Exception as e:
+            # Don't hard-fail here: users may be running LakeFS against real S3 or a differently
+            # provisioned blockstore. We'll surface any real issues when we attempt to write.
+            print(f"Warning: Could not ensure LakeFS backing bucket exists: {e}")
+
     # LakeFS API base URL (remove trailing slash if present)
     api_base = config.endpoint_url.rstrip("/")
     auth = (config.access_key_id, config.secret_access_key)
@@ -153,14 +176,8 @@ def ensure_lakefs_repository(config: LakeFSConfig | None = None) -> None:
 
     if resp.status_code == 404:
         # Repository doesn't exist, create it
-        # Get MinIO endpoint from environment for storage namespace
-        minio_endpoint = os.getenv("MINIO_ENDPOINT_URL", "http://minio:9000")
-        # Use internal minio service name if running in k8s
-        if "localhost" in minio_endpoint:
-            # For kind cluster, use the internal service name
-            storage_namespace = f"s3://lakefs-data/{config.repository}"
-        else:
-            storage_namespace = f"s3://lakefs-data/{config.repository}"
+        backing_bucket = os.getenv("LAKEFS_STORAGE_BUCKET", "lakefs-data")
+        storage_namespace = f"s3://{backing_bucket}/{config.repository}"
 
         create_url = f"{api_base}/api/v1/repositories"
         create_data = {

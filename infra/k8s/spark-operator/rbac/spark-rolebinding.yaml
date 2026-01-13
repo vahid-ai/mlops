@@ -1,0 +1,35 @@
+# RoleBinding for Spark ServiceAccount in default namespace
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: spark-rolebinding
+  namespace: default
+  labels:
+    app.kubernetes.io/name: spark
+    app.kubernetes.io/component: spark-applications
+subjects:
+  - kind: ServiceAccount
+    name: spark
+    namespace: default
+roleRef:
+  kind: Role
+  name: spark-role
+  apiGroup: rbac.authorization.k8s.io
+---
+# RoleBinding for Spark ServiceAccount in kubeflow namespace
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: spark-rolebinding
+  namespace: kubeflow
+  labels:
+    app.kubernetes.io/name: spark
+    app.kubernetes.io/component: spark-applications
+subjects:
+  - kind: ServiceAccount
+    name: spark
+    namespace: kubeflow
+roleRef:
+  kind: Role
+  name: spark-role
+  apiGroup: rbac.authorization.k8s.io

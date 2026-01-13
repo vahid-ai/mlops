@@ -1,0 +1,179 @@
+# Template SparkApplication for Kronodroid Iceberg transformation
+# This is a standalone example; the KFP component generates this dynamically
+#
+# Usage:
+#   kubectl apply -f sparkapplication-kronodroid.yaml
+#   kubectl get sparkapplications
+#   kubectl logs kronodroid-iceberg-driver
+
+apiVersion: sparkoperator.k8s.io/v1beta2
+kind: SparkApplication
+metadata:
+  name: kronodroid-iceberg-manual
+  namespace: default
+  labels:
+    app.kubernetes.io/name: kronodroid-iceberg
+    app.kubernetes.io/component: spark-job
+spec:
+  type: Python
+  pythonVersion: "3"
+  mode: cluster
+  
+  # Spark image with Python 3 and necessary dependencies
+  # For production, build a custom image with the job pre-installed
+  image: apache/spark:3.5.0-python3
+  imagePullPolicy: Always
+  
+  # Main application file
+  # In production, this would be a path inside the container image
+  # For development, you can use a remote URL or mounted volume
+  mainApplicationFile: local:///opt/spark/jobs/kronodroid_iceberg_job.py
+  
+  # Arguments to the job
+  arguments:
+    - "--minio-bucket"
+    - "dlt-data"
+    - "--minio-prefix"
+    - "kronodroid_raw"
+    - "--lakefs-repository"
+    - "kronodroid"
+    - "--lakefs-branch"
+    - "main"
+    - "--catalog-name"
+    - "lakefs"
+    - "--staging-database"
+    - "stg_kronodroid"
+    - "--marts-database"
+    - "kronodroid"
+  
+  sparkVersion: "3.5.0"
+  
+  restartPolicy:
+    type: Never
+  
+  # Driver configuration
+  driver:
+    cores: 1
+    coreLimit: "1200m"
+    memory: "2g"
+    serviceAccount: spark
+    labels:
+      app.kubernetes.io/name: kronodroid-iceberg
+      app.kubernetes.io/component: driver
+    # Environment variables from secrets
+    envFrom:
+      - secretRef:
+          name: minio-credentials
+      - secretRef:
+          name: lakefs-credentials
+    env:
+      - name: MINIO_ENDPOINT_URL
+        value: "http://minio:9000"
+      - name: LAKEFS_ENDPOINT_URL
+        value: "http://lakefs:8000"
+      - name: LAKEFS_REPOSITORY
+        value: "kronodroid"
+      - name: LAKEFS_BRANCH
+        value: "main"
+    # Volume mounts for the job file (development only)
+    # In production, bake the job into the image
+    volumeMounts:
+      - name: spark-jobs
+        mountPath: /opt/spark/jobs
+  
+  # Executor configuration
+  executor:
+    cores: 2
+    coreLimit: "2000m"
+    memory: "2g"
+    instances: 2
+    labels:
+      app.kubernetes.io/name: kronodroid-iceberg
+      app.kubernetes.io/component: executor
+    envFrom:
+      - secretRef:
+          name: minio-credentials
+      - secretRef:
+          name: lakefs-credentials
+    env:
+      - name: MINIO_ENDPOINT_URL
+        value: "http://minio:9000"
+      - name: LAKEFS_ENDPOINT_URL
+        value: "http://lakefs:8000"
+      - name: LAKEFS_REPOSITORY
+        value: "kronodroid"
+      - name: LAKEFS_BRANCH
+        value: "main"
+    volumeMounts:
+      - name: spark-jobs
+        mountPath: /opt/spark/jobs
+  
+  # Maven dependencies for Iceberg + S3A + Avro
+  deps:
+    packages:
+      - org.apache.iceberg:iceberg-spark-runtime-3.5_2.12:1.5.2
+      - org.apache.iceberg:iceberg-aws:1.5.2
+      - org.apache.hadoop:hadoop-aws:3.3.4
+      - com.amazonaws:aws-java-sdk-bundle:1.12.262
+  
+  # Spark configuration
+  sparkConf:
+    # Iceberg extensions
+    spark.sql.extensions: org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions
+    
+    # LakeFS Iceberg REST catalog
+    spark.sql.catalog.lakefs: org.apache.iceberg.spark.SparkCatalog
+    spark.sql.catalog.lakefs.catalog-impl: org.apache.iceberg.rest.RESTCatalog
+    spark.sql.catalog.lakefs.uri: "http://lakefs:8000/api/v1/iceberg"
+    spark.sql.catalog.lakefs.warehouse: "s3a://kronodroid/main/iceberg"
+    
+    # S3A filesystem configuration
+    spark.hadoop.fs.s3a.impl: org.apache.hadoop.fs.s3a.S3AFileSystem
+    spark.hadoop.fs.s3a.path.style.access: "true"
+    spark.hadoop.fs.s3a.connection.ssl.enabled: "false"
+    
+    # Per-bucket endpoints (MinIO for raw data, LakeFS for Iceberg)
+    spark.hadoop.fs.s3a.bucket.dlt-data.endpoint: "http://minio:9000"
+    spark.hadoop.fs.s3a.bucket.kronodroid.endpoint: "http://lakefs:8000"
+    
+    # Iceberg defaults
+    spark.sql.iceberg.write.format.default: avro
+    spark.sql.iceberg.write.avro.compression-codec: snappy
+    
+    # Performance tuning
+    spark.sql.shuffle.partitions: "16"
+    spark.default.parallelism: "8"
+  
+  # Volumes for development (mount job file from ConfigMap)
+  volumes:
+    - name: spark-jobs
+      configMap:
+        name: kronodroid-iceberg-job
+        defaultMode: 0755
+
+---
+# ConfigMap containing the job file (for development/testing)
+# In production, bake the job into the Spark image
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: kronodroid-iceberg-job
+  namespace: default
+  labels:
+    app.kubernetes.io/name: kronodroid-iceberg
+    app.kubernetes.io/component: job-config
+data:
+  kronodroid_iceberg_job.py: |
+    #!/usr/bin/env python3
+    """Kronodroid Iceberg transformation job (inline for ConfigMap)."""
+    # For the full implementation, see:
+    # engines/spark_engine/dfp_spark/kronodroid_iceberg_job.py
+    #
+    # This is a minimal placeholder. In production, build a Docker image
+    # that includes the full job file.
+    
+    import sys
+    print("Kronodroid Iceberg job placeholder")
+    print("For the full implementation, build a custom Spark image with the job baked in")
+    print("See: engines/spark_engine/dfp_spark/kronodroid_iceberg_job.py")
+    sys.exit(0)

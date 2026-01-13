@@ -27,6 +27,9 @@ dependencies = [
     "duckdb>=0.10",
     # HTTP client for LakeFS API
     "requests>=2.31",
+    # Kubeflow / SparkOperator submission (tools/scripts/run_kronodroid_pipeline.py --transform-engine kubeflow)
+    "kubernetes>=29.0",
+    "pyyaml>=6.0",
 ]
 
 [dependency-groups]

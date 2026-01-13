@@ -1,0 +1,75 @@
+# Helm values for Spark Operator installation
+# Install with: helm install spark-operator spark-operator/spark-operator -f values.yaml
+
+# Operator configuration
+replicaCount: 1
+
+image:
+  repository: ghcr.io/kubeflow/spark-operator
+  tag: v2.0.0-rc.0
+  pullPolicy: IfNotPresent
+
+# Controller configuration
+controller:
+  # Watch all namespaces or specific ones
+  workers: 2
+
+# Webhook configuration (for mutating SparkApplications)
+webhook:
+  enable: true
+  port: 8080
+
+# Spark job namespace configuration
+spark:
+  # Namespaces to watch for SparkApplications
+  jobNamespaces:
+    - default
+    - kubeflow
+
+# Service account for the operator
+serviceAccount:
+  create: true
+  name: spark-operator
+
+# Resource limits for the operator pod
+resources:
+  limits:
+    cpu: 500m
+    memory: 512Mi
+  requests:
+    cpu: 100m
+    memory: 128Mi
+
+# Pod security context
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 1000
+  fsGroup: 1000
+
+# Node selector
+nodeSelector: {}
+
+# Tolerations
+tolerations: []
+
+# Affinity
+affinity: {}
+
+# Prometheus metrics
+metrics:
+  enable: true
+  port: 10254
+  endpoint: /metrics
+
+# Leader election (for HA)
+leaderElection:
+  enable: true
+  lockName: spark-operator-lock
+  lockNamespace: ""  # Uses operator namespace
+
+# Batch scheduler (for integration with Volcano, etc.)
+batchScheduler:
+  enable: false
+
+# Log level
+logLevel: info

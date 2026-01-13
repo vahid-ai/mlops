@@ -9,7 +9,7 @@ import dlt
 import pandas as pd
 from dlt.sources import DltResource
 
-from .kaggle_compat import patch_kagglesdk_user_agent
+from .kaggle_compat import patch_all as patch_kagglesdk
 
 
 def _setup_kaggle_auth() -> None:
@@ -64,7 +64,7 @@ def _download_kaggle_dataset(dataset_slug: str, download_dir: Path) -> Path:
         Path to the extracted dataset directory
     """
     _setup_kaggle_auth()
-    patch_kagglesdk_user_agent()
+    patch_kagglesdk()
 
     # NOTE: The `kaggle` package authenticates at import time.
     import kaggle  # type: ignore[import-not-found]

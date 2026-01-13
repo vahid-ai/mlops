@@ -1,2 +1,44 @@
-catalog: lakefs
-warehouse: s3a://warehouse
+# Spark engine configuration for Iceberg + LakeFS
+# Used by Hydra to configure Spark jobs
+
+# Iceberg catalog configuration
+catalog:
+  name: lakefs
+  type: rest  # LakeFS Iceberg REST catalog
+  
+# Warehouse location (relative to LakeFS branch)
+warehouse:
+  path: iceberg  # Tables written to s3a://${lakefs.repository}/${lakefs.branch}/iceberg
+
+# Default databases
+databases:
+  staging: stg_kronodroid
+  marts: kronodroid
+
+# Iceberg table properties
+table_properties:
+  write.format.default: avro  # Use Avro as the default file format
+  write.parquet.compression-codec: zstd  # Fallback if using Parquet
+  write.avro.compression-codec: snappy
+
+# Spark resource configuration (can be overridden by SparkApplication)
+resources:
+  driver:
+    memory: 2g
+    cores: 1
+  executor:
+    memory: 2g
+    cores: 2
+    instances: 2
+
+# Maven packages required for Iceberg + S3A + Avro
+packages:
+  - org.apache.iceberg:iceberg-spark-runtime-3.5_2.12:1.5.2
+  - org.apache.iceberg:iceberg-aws:1.5.2
+  - org.apache.iceberg:iceberg-avro:1.5.2
+  - org.apache.hadoop:hadoop-aws:3.3.4
+  - com.amazonaws:aws-java-sdk-bundle:1.12.262
+
+# Spark extensions
+extensions:
+  - org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions

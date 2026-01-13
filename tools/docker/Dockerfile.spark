@@ -1,0 +1,30 @@
+# Spark image with Kronodroid Iceberg job
+#
+# Build:
+#   docker build -t dfp-spark:latest -f tools/docker/Dockerfile.spark .
+#
+# For Kind clusters:
+#   kind load docker-image dfp-spark:latest --name dfp-kind
+
+FROM apache/spark-py:v3.5.0
+
+USER root
+
+# Install additional Python dependencies
+COPY pyproject.toml /opt/spark/work-dir/
+RUN pip install --no-cache-dir \
+    pyspark==3.5.0 \
+    pyarrow>=14.0.0 \
+    requests>=2.31.0
+
+# Copy the Spark job and supporting modules
+COPY engines/spark_engine/dfp_spark/kronodroid_iceberg_job.py /opt/spark/work-dir/
+COPY engines/spark_engine/dfp_spark/session.py /opt/spark/work-dir/
+
+# Set working directory
+WORKDIR /opt/spark/work-dir
+
+# Switch back to spark user
+USER spark
+
+# Default entrypoint from base image handles spark-submit

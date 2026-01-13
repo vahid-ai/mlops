@@ -1,0 +1,166 @@
+# SparkApplication template for Kronodroid Iceberg transformation
+#
+# This template shows the structure of the SparkApplication that the KFP
+# component generates programmatically. You can also use this directly
+# for testing or manual runs.
+#
+# Usage:
+#   # Replace placeholders and apply
+#   envsubst < kronodroid-iceberg-sparkapplication.yaml | kubectl apply -f -
+#
+# Required environment variables:
+#   - MINIO_ENDPOINT_URL
+#   - MINIO_ACCESS_KEY_ID
+#   - MINIO_SECRET_ACCESS_KEY
+#   - MINIO_BUCKET_NAME
+#   - LAKEFS_ENDPOINT_URL
+#   - LAKEFS_ACCESS_KEY_ID
+#   - LAKEFS_SECRET_ACCESS_KEY
+#   - LAKEFS_REPOSITORY
+#   - LAKEFS_BRANCH
+#   - RUN_ID (unique identifier for this run)
+
+apiVersion: sparkoperator.k8s.io/v1beta2
+kind: SparkApplication
+metadata:
+  name: kronodroid-iceberg-${RUN_ID:-manual}
+  namespace: default
+  labels:
+    app.kubernetes.io/name: kronodroid-iceberg
+    app.kubernetes.io/component: spark-job
+    pipeline: kronodroid-iceberg
+spec:
+  type: Python
+  pythonVersion: "3"
+  mode: cluster
+  
+  # Spark image with Python and required dependencies
+  # Build from: tools/docker/Dockerfile.spark
+  image: dfp-spark:latest
+  imagePullPolicy: IfNotPresent
+  
+  # Main application file (copied into image)
+  mainApplicationFile: local:///opt/spark/work-dir/kronodroid_iceberg_job.py
+  
+  # Application arguments
+  arguments:
+    - "--minio-bucket"
+    - "${MINIO_BUCKET_NAME:-dlt-data}"
+    - "--dataset-name"
+    - "kronodroid_raw"
+    - "--catalog-name"
+    - "lakefs"
+    - "--staging-db"
+    - "stg_kronodroid"
+    - "--marts-db"
+    - "kronodroid"
+  
+  sparkVersion: "3.5.0"
+  
+  restartPolicy:
+    type: Never
+  
+  # Driver configuration
+  driver:
+    cores: 1
+    coreLimit: "1200m"
+    memory: "2g"
+    labels:
+      version: "3.5.0"
+      app.kubernetes.io/component: driver
+    serviceAccount: spark
+    env:
+      - name: MINIO_ENDPOINT_URL
+        value: "${MINIO_ENDPOINT_URL:-http://minio:9000}"
+      - name: MINIO_ACCESS_KEY_ID
+        value: "${MINIO_ACCESS_KEY_ID:-minioadmin}"
+      - name: MINIO_SECRET_ACCESS_KEY
+        value: "${MINIO_SECRET_ACCESS_KEY:-minioadmin}"
+      - name: MINIO_BUCKET_NAME
+        value: "${MINIO_BUCKET_NAME:-dlt-data}"
+      - name: LAKEFS_ENDPOINT_URL
+        value: "${LAKEFS_ENDPOINT_URL:-http://lakefs:8000}"
+      - name: LAKEFS_ACCESS_KEY_ID
+        value: "${LAKEFS_ACCESS_KEY_ID}"
+      - name: LAKEFS_SECRET_ACCESS_KEY
+        value: "${LAKEFS_SECRET_ACCESS_KEY}"
+      - name: LAKEFS_REPOSITORY
+        value: "${LAKEFS_REPOSITORY:-kronodroid}"
+      - name: LAKEFS_BRANCH
+        value: "${LAKEFS_BRANCH:-main}"
+      - name: ICEBERG_CATALOG_NAME
+        value: "lakefs"
+  
+  # Executor configuration
+  executor:
+    cores: 2
+    instances: 2
+    memory: "2g"
+    labels:
+      version: "3.5.0"
+      app.kubernetes.io/component: executor
+    env:
+      - name: MINIO_ENDPOINT_URL
+        value: "${MINIO_ENDPOINT_URL:-http://minio:9000}"
+      - name: MINIO_ACCESS_KEY_ID
+        value: "${MINIO_ACCESS_KEY_ID:-minioadmin}"
+      - name: MINIO_SECRET_ACCESS_KEY
+        value: "${MINIO_SECRET_ACCESS_KEY:-minioadmin}"
+      - name: MINIO_BUCKET_NAME
+        value: "${MINIO_BUCKET_NAME:-dlt-data}"
+      - name: LAKEFS_ENDPOINT_URL
+        value: "${LAKEFS_ENDPOINT_URL:-http://lakefs:8000}"
+      - name: LAKEFS_ACCESS_KEY_ID
+        value: "${LAKEFS_ACCESS_KEY_ID}"
+      - name: LAKEFS_SECRET_ACCESS_KEY
+        value: "${LAKEFS_SECRET_ACCESS_KEY}"
+      - name: LAKEFS_REPOSITORY
+        value: "${LAKEFS_REPOSITORY:-kronodroid}"
+      - name: LAKEFS_BRANCH
+        value: "${LAKEFS_BRANCH:-main}"
+      - name: ICEBERG_CATALOG_NAME
+        value: "lakefs"
+  
+  # Spark configuration
+  sparkConf:
+    # Iceberg catalog - LakeFS REST catalog
+    "spark.sql.catalog.lakefs": "org.apache.iceberg.spark.SparkCatalog"
+    "spark.sql.catalog.lakefs.catalog-impl": "org.apache.iceberg.rest.RESTCatalog"
+    "spark.sql.catalog.lakefs.uri": "${LAKEFS_ENDPOINT_URL:-http://lakefs:8000}/api/v1/repositories/${LAKEFS_REPOSITORY:-kronodroid}/refs/${LAKEFS_BRANCH:-main}/iceberg"
+    "spark.sql.catalog.lakefs.warehouse": "s3a://${LAKEFS_REPOSITORY:-kronodroid}/${LAKEFS_BRANCH:-main}/iceberg"
+    "spark.sql.catalog.lakefs.io-impl": "org.apache.iceberg.aws.s3.S3FileIO"
+    
+    # Spark SQL extensions
+    "spark.sql.extensions": "org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions"
+    "spark.sql.defaultCatalog": "lakefs"
+    
+    # S3A configuration for MinIO bucket (raw data)
+    "spark.hadoop.fs.s3a.bucket.${MINIO_BUCKET_NAME:-dlt-data}.endpoint": "${MINIO_ENDPOINT_URL:-http://minio:9000}"
+    "spark.hadoop.fs.s3a.bucket.${MINIO_BUCKET_NAME:-dlt-data}.access.key": "${MINIO_ACCESS_KEY_ID:-minioadmin}"
+    "spark.hadoop.fs.s3a.bucket.${MINIO_BUCKET_NAME:-dlt-data}.secret.key": "${MINIO_SECRET_ACCESS_KEY:-minioadmin}"
+    "spark.hadoop.fs.s3a.bucket.${MINIO_BUCKET_NAME:-dlt-data}.path.style.access": "true"
+    "spark.hadoop.fs.s3a.bucket.${MINIO_BUCKET_NAME:-dlt-data}.connection.ssl.enabled": "false"
+    
+    # S3A configuration for LakeFS repository (Iceberg warehouse)
+    "spark.hadoop.fs.s3a.bucket.${LAKEFS_REPOSITORY:-kronodroid}.endpoint": "${LAKEFS_ENDPOINT_URL:-http://lakefs:8000}"
+    "spark.hadoop.fs.s3a.bucket.${LAKEFS_REPOSITORY:-kronodroid}.access.key": "${LAKEFS_ACCESS_KEY_ID}"
+    "spark.hadoop.fs.s3a.bucket.${LAKEFS_REPOSITORY:-kronodroid}.secret.key": "${LAKEFS_SECRET_ACCESS_KEY}"
+    "spark.hadoop.fs.s3a.bucket.${LAKEFS_REPOSITORY:-kronodroid}.path.style.access": "true"
+    "spark.hadoop.fs.s3a.bucket.${LAKEFS_REPOSITORY:-kronodroid}.connection.ssl.enabled": "false"
+    
+    # General S3A configuration
+    "spark.hadoop.fs.s3a.impl": "org.apache.hadoop.fs.s3a.S3AFileSystem"
+    "spark.hadoop.fs.s3a.path.style.access": "true"
+    
+    # Performance tuning
+    "spark.sql.adaptive.enabled": "true"
+    "spark.sql.adaptive.coalescePartitions.enabled": "true"
+  
+  # Maven dependencies
+  deps:
+    packages:
+      - "org.apache.iceberg:iceberg-spark-runtime-3.5_2.12:1.5.2"
+      - "org.apache.iceberg:iceberg-aws:1.5.2"
+      - "org.apache.iceberg:iceberg-avro:1.5.2"
+      - "org.apache.hadoop:hadoop-aws:3.3.4"
+      - "com.amazonaws:aws-java-sdk-bundle:1.12.262"

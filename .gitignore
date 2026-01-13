@@ -22,6 +22,9 @@ __pycache__/
 .env
 .env.*
 
+# uv cache (keep inside repo for sandboxed runs)
+.uv-cache/
+
 # Local configuration file (sdk path, etc)
 local.properties
 
@@ -57,3 +60,17 @@ google-services.json
 analytics/dbt/target/
 analytics/dbt/data/*.duckdb
 analytics/dbt/profiles/.user.yml
+
+# Kubeflow Pipelines compiled artifacts
+*.yaml.tar.gz
+*_pipeline.yaml
+*_pipeline.json
+
+# Spark artifacts
+spark-warehouse/
+metastore_db/
+derby.log
+
+# Iceberg metadata (local testing)
+*.metadata.json
+*.avro
