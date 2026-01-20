@@ -30,6 +30,8 @@ dependencies = [
     # Kubeflow / SparkOperator submission (tools/scripts/run_kronodroid_pipeline.py --transform-engine kubeflow)
     "kubernetes>=29.0",
     "pyyaml>=6.0",
+    # Training
+    "lightning>=2.2",
 ]
 
 [dependency-groups]

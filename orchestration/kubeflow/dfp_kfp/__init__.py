@@ -14,6 +14,8 @@ __all__ = [
     # Pipelines
     "kronodroid_iceberg_pipeline",
     "kronodroid_full_pipeline",
+    "kronodroid_autoencoder_pipeline",
+    "compile_kronodroid_autoencoder_pipeline",
     "compile_pipeline",
     "compile_full_pipeline",
 ]
@@ -56,5 +58,16 @@ def __getattr__(name: str):
             return compile_pipeline
         else:
             return compile_full_pipeline
+
+    if name in ("kronodroid_autoencoder_pipeline", "compile_kronodroid_autoencoder_pipeline"):
+        from orchestration.kubeflow.dfp_kfp.pipelines.kronodroid_autoencoder_pipeline import (
+            kronodroid_autoencoder_pipeline,
+            compile_kronodroid_autoencoder_pipeline,
+        )
+        return (
+            kronodroid_autoencoder_pipeline
+            if name == "kronodroid_autoencoder_pipeline"
+            else compile_kronodroid_autoencoder_pipeline
+        )
 
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

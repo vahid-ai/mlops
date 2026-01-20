@@ -162,3 +162,22 @@ malware_batch_features = BatchFeatureView(
     source=kronodroid_training_source,
     tags={"team": "dfp", "dataset": "kronodroid", "usage": "training"},
 )
+
+
+# Autoencoder-friendly numeric feature view (no labels/strings)
+kronodroid_autoencoder_features = FeatureView(
+    name="kronodroid_autoencoder_features",
+    entities=[malware_sample],
+    ttl=timedelta(days=365),
+    schema=[
+        Field(name=f"syscall_{i}_normalized", dtype=Float32)
+        for i in range(1, 21)
+    ]
+    + [
+        Field(name="syscall_total", dtype=Float64),
+        Field(name="syscall_mean", dtype=Float64),
+    ],
+    source=kronodroid_training_source,
+    online=False,
+    tags={"team": "dfp", "dataset": "kronodroid", "usage": "autoencoder"},
+)

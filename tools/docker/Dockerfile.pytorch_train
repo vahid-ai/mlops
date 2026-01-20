@@ -1,2 +1,36 @@
-# Placeholder Dockerfile for PyTorch training component
+# Image for KFP training components (Feast + Spark offline store + MLflow + Lightning).
+#
+# Build:
+#   docker build -f tools/docker/Dockerfile.pytorch_train -t dfp/kronodroid-train:latest .
+#
+# Push (example):
+#   docker tag dfp/kronodroid-train:latest <your-registry>/dfp/kronodroid-train:latest
+#   docker push <your-registry>/dfp/kronodroid-train:latest
 FROM python:3.11-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PYTHONPATH=/app
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      openjdk-17-jre-headless \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+COPY . /app
+
+# Install only what the training components need.
+# Note: Feast Spark offline store pulls Iceberg jars via spark.jars.packages at runtime.
+RUN pip install --no-cache-dir \
+      "kfp>=2.0.0" \
+      "pandas>=2.1" \
+      "pyarrow>=13.0" \
+      "pyyaml>=6.0" \
+      "mlflow>=2.9" \
+      "torch>=2.1" \
+      "lightning>=2.2" \
+      "feast[redis]>=0.32" \
+      "pyspark>=3.5" \
+      "lakefs-client>=1.1" \
+      "requests>=2.31"

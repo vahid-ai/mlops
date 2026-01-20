@@ -76,6 +76,10 @@ python tools/scripts/run_kronodroid_pipeline.py --materialize-only
 2. **dbt Models** (`analytics/dbt/models/*/kronodroid/`): Transforms raw data into feature tables
 3. **Feast Features** (`feature_stores/feast_store/dfp_feast/kronodroid_features.py`): Feature definitions for ML
 
+### Autoencoder Training (Kubeflow + MLflow)
+
+See `docs/kronodroid_autoencoder_pipeline.md` for the end-to-end Kubeflow pipeline that builds Avro/Iceberg feature tables in LakeFS and trains/tests/registers a PyTorch Lightning autoencoder using Feast FeatureViews as the training data interface.
+
 ### Data Flow
 ```
 Kaggle API → dlt → MinIO (raw) → dbt → MinIO (transformed) → Feast → Redis (online)

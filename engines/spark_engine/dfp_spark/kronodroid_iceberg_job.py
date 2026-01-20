@@ -24,9 +24,12 @@ from typing import TYPE_CHECKING, List
 from pyspark.sql import SparkSession, DataFrame
 from pyspark.sql import functions as F
 from pyspark.sql.window import Window
+from functools import reduce
 
 if TYPE_CHECKING:
     pass
+
+SYSCALL_FEATURE_COUNT = 20
 
 
 def get_args() -> argparse.Namespace:
@@ -162,6 +165,49 @@ def create_stg_combined(
     return combined.withColumn("sample_id", F.row_number().over(window))
 
 
+def ensure_kronodroid_feature_columns(df: DataFrame) -> DataFrame:
+    """Normalize Kronodroid feature column set for downstream (Feast/ML).
+
+    The Kaggle Kronodroid dataset can vary slightly by version/source. To keep
+    Feast FeatureViews stable, we ensure key columns exist and are typed.
+    """
+    # Ensure syscall_1_normalized ... syscall_20_normalized exist and are Float32-ish.
+    for i in range(1, SYSCALL_FEATURE_COUNT + 1):
+        col_name = f"syscall_{i}_normalized"
+        if col_name not in df.columns:
+            df = df.withColumn(col_name, F.lit(0.0))
+        df = df.withColumn(col_name, F.col(col_name).cast("float"))
+
+    syscall_cols = [F.col(f"syscall_{i}_normalized") for i in range(1, SYSCALL_FEATURE_COUNT + 1)]
+    syscall_total = reduce(lambda a, b: a + b, syscall_cols, F.lit(0.0))
+
+    df = df.withColumn("syscall_total", syscall_total.cast("double"))
+    df = df.withColumn(
+        "syscall_mean",
+        (F.col("syscall_total") / F.lit(float(SYSCALL_FEATURE_COUNT))).cast("double"),
+    )
+
+    # Align label column name with Feast FeatureView (prefer existing label).
+    if "label" not in df.columns and "is_malware" in df.columns:
+        df = df.withColumn("label", F.col("is_malware").cast("long"))
+    elif "label" in df.columns:
+        df = df.withColumn("label", F.col("label").cast("long"))
+
+    # Optional metadata expected by Feast definitions.
+    if "malware_family" not in df.columns:
+        for candidate in ("family", "family_name", "malware_family_name"):
+            if candidate in df.columns:
+                df = df.withColumn("malware_family", F.col(candidate).cast("string"))
+                break
+        else:
+            df = df.withColumn("malware_family", F.lit("unknown"))
+
+    if "first_seen_year" not in df.columns and "event_timestamp" in df.columns:
+        df = df.withColumn("first_seen_year", F.year(F.col("event_timestamp")).cast("long"))
+
+    return df
+
+
 def create_fct_malware_samples(stg_combined: DataFrame) -> DataFrame:
     """Create fct_malware_samples fact table.
 
@@ -183,7 +229,7 @@ def create_fct_malware_samples(stg_combined: DataFrame) -> DataFrame:
     # Add feature_timestamp from _dbt_loaded_at
     df = df.withColumn("feature_timestamp", F.col("_dbt_loaded_at"))
 
-    return df
+    return ensure_kronodroid_feature_columns(df)
 
 
 def create_dim_malware_families(stg_combined: DataFrame) -> DataFrame:

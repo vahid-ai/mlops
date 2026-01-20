@@ -5,6 +5,7 @@ from .feature_views import user_daily_features
 from .kronodroid_features import (
     kronodroid_family_source,
     kronodroid_training_source,
+    kronodroid_autoencoder_features,
     malware_batch_features,
     malware_derived_features,
     malware_family_features,
@@ -23,6 +24,7 @@ __all__ = [
     "malware_family_features",
     "malware_batch_features",
     "malware_derived_features",
+    "kronodroid_autoencoder_features",
     # Sources
     "kronodroid_training_source",
     "kronodroid_family_source",
