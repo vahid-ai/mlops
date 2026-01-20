@@ -7,7 +7,7 @@ registry:
   cache_ttl_seconds: 60
 
 # Offline store using Spark with LakeFS Iceberg catalog
-# Tables located at: lakefs://kronodroid/main/iceberg/kronodroid/<table_name>
+# Tables located at: lakefs://kronodroid/dev/iceberg/kronodroid/<table_name>
 offline_store:
   type: spark
   spark_conf:
@@ -16,7 +16,7 @@ offline_store:
     # LakeFS Iceberg catalog (Hadoop-based)
     spark.sql.catalog.lakefs: org.apache.iceberg.spark.SparkCatalog
     spark.sql.catalog.lakefs.type: hadoop
-    spark.sql.catalog.lakefs.warehouse: s3a://kronodroid/main/iceberg
+    spark.sql.catalog.lakefs.warehouse: s3a://kronodroid/dev/iceberg
     # S3A filesystem for LakeFS S3 gateway
     spark.hadoop.fs.s3a.impl: org.apache.hadoop.fs.s3a.S3AFileSystem
     spark.hadoop.fs.s3a.path.style.access: "true"

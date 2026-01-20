@@ -19,9 +19,10 @@ from feast.types import Float32
 # -----------------------------------------------------------------------------
 
 # Placeholder source - not used but required for the legacy feature view
+# Path must be non-empty for Feast validation even if not actively used
 users_source = FileSource(
     name="users_legacy",
-    path="",  # Placeholder - not used
+    path="data/placeholder/training_dataset.parquet",
     timestamp_field="event_timestamp",
 )
 

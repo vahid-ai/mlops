@@ -3,7 +3,7 @@
 #
 # Usage:
 #   export LAKEFS_REPOSITORY=kronodroid
-#   export LAKEFS_BRANCH=main
+#   export LAKEFS_BRANCH=dev
 #   feast -c feature_store_spark.yaml apply
 
 project: dfp

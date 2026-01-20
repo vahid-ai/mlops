@@ -1151,7 +1151,10 @@ def run_feast_apply() -> bool:
 
     except subprocess.CalledProcessError as e:
         print(f"ERROR: feast apply failed: {e}")
-        print(f"stderr: {e.stderr}")
+        if e.stdout:
+            print(f"stdout: {e.stdout}")
+        if e.stderr:
+            print(f"stderr: {e.stderr}")
         return False
     except FileNotFoundError:
         print("ERROR: feast command not found. Install with: pip install feast")
