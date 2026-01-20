@@ -27,7 +27,7 @@ spec:
   # Main application file
   # In production, this would be a path inside the container image
   # For development, you can use a remote URL or mounted volume
-  mainApplicationFile: local:///opt/spark/jobs/kronodroid_iceberg_job.py
+  mainApplicationFile: local:///opt/spark/work-dir/kronodroid_iceberg_job.py
   
   # Arguments to the job
   arguments:
@@ -50,7 +50,16 @@ spec:
   
   restartPolicy:
     type: Never
-  
+
+  # Spark UI configuration - enables monitoring via web UI
+  sparkUIOptions:
+    # Create a ClusterIP service for the Spark UI
+    serviceType: ClusterIP
+    # Service port for the UI (Spark driver UI runs on 4040)
+    servicePort: 4040
+    # Service port name
+    servicePortName: spark-ui
+
   # Driver configuration
   driver:
     cores: 1

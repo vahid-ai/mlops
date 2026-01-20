@@ -1,16 +1,18 @@
 """Component: train + validate + test Kronodroid autoencoder and register in MLflow."""
 
-from __future__ import annotations
-
-from typing import NamedTuple
-
 from kfp import dsl
 
 
-DEFAULT_TRAIN_IMAGE = "dfp/kronodroid-train:latest"
-
-
-@dsl.component(base_image=DEFAULT_TRAIN_IMAGE)
+@dsl.component(
+    base_image="python:3.11-slim",
+    packages_to_install=[
+        "mlflow>=2.0",
+        "torch>=2.0",
+        "lightning>=2.0",
+        "feast[spark]>=0.30",
+        "pyarrow>=14.0",
+    ],
+)
 def train_kronodroid_autoencoder_op(
     mlflow_tracking_uri: str,
     mlflow_experiment_name: str,
@@ -24,23 +26,27 @@ def train_kronodroid_autoencoder_op(
     feast_project: str,
     feast_feature_view: str,
     feature_names_json: str,
-    feast_definitions_paths_json: str = "[]",
-    max_rows_per_split: int = 0,
-    latent_dim: int = 16,
-    hidden_dims_json: str = "[128, 64]",
-    batch_size: int = 512,
-    max_epochs: int = 10,
-    seed: int = 1337,
-) -> NamedTuple("TrainOutput", [("run_id", str), ("model_name", str), ("model_version", str)]):
-    import json
-    from collections import namedtuple
+    feast_definitions_paths_json: str,
+    max_rows_per_split: int,
+    latent_dim: int,
+    hidden_dims_json: str,
+    batch_size: int,
+    max_epochs: int,
+    seed: int,
+) -> str:
+    """Train, validate, test, and register a Kronodroid autoencoder model.
 
-    Output = namedtuple("TrainOutput", ["run_id", "model_name", "model_version"])
+    Returns:
+        JSON string with run_id, model_name, model_version
+    """
+    import json
+    import os
 
     feature_names = json.loads(feature_names_json)
-    feast_def_paths = json.loads(feast_definitions_paths_json)
+    feast_def_paths = json.loads(feast_definitions_paths_json) if feast_definitions_paths_json else []
     hidden_dims_list = json.loads(hidden_dims_json)
 
+    # Import training module
     from core.dfp_core.ml.train_kronodroid_autoencoder import train_and_register
 
     result = train_and_register(
@@ -57,13 +63,17 @@ def train_kronodroid_autoencoder_op(
         feast_feature_view=feast_feature_view,
         feature_names=list(feature_names),
         feast_definitions_paths=list(feast_def_paths) if feast_def_paths else None,
-        max_rows_per_split=(max_rows_per_split or None),
-        latent_dim=int(latent_dim),
-        hidden_dims=tuple(int(x) for x in hidden_dims_list),
-        batch_size=int(batch_size),
-        max_epochs=int(max_epochs),
-        seed=int(seed),
+        max_rows_per_split=(max_rows_per_split if max_rows_per_split > 0 else None),
+        latent_dim=latent_dim,
+        hidden_dims=tuple(hidden_dims_list),
+        batch_size=batch_size,
+        max_epochs=max_epochs,
+        seed=seed,
     )
 
-    return Output(result["run_id"], result["model_name"], result["model_version"])
-
+    # Return JSON string with results
+    return json.dumps({
+        "run_id": result["run_id"],
+        "model_name": result["model_name"],
+        "model_version": result["model_version"],
+    })

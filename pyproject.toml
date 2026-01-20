@@ -32,6 +32,9 @@ dependencies = [
     "pyyaml>=6.0",
     # Training
     "lightning>=2.2",
+    "kfp>=2.15.2",
+    "kfp-kubernetes>=1.4.0",
+    "ipykernel>=7.1.0",
 ]
 
 [dependency-groups]

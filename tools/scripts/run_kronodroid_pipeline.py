@@ -7,6 +7,7 @@ This script orchestrates the full data ingestion and transformation pipeline:
 2. Load raw data into MinIO (or LakeFS for versioning)
 3. Run transformations to create feature tables (dbt or Kubeflow SparkOperator)
 4. Register features with Feast and materialize to online store
+5. (Optional) Train an autoencoder model using the transformed features
 
 Usage:
     # Full pipeline with MinIO (using dbt)
@@ -18,6 +19,16 @@ Usage:
     # Use Kubeflow SparkOperator for transformations (writes Iceberg/Avro)
     python run_kronodroid_pipeline.py --destination lakefs --transform-engine kubeflow
 
+    # Full pipeline with autoencoder training at the end
+    python run_kronodroid_pipeline.py --destination lakefs --transform-engine kubeflow --train-autoencoder
+
+    # Only run autoencoder training (assumes data already in LakeFS)
+    python run_kronodroid_pipeline.py --destination lakefs --autoencoder-only --branch main
+
+    # Autoencoder with custom hyperparameters
+    python run_kronodroid_pipeline.py --destination lakefs --autoencoder-only \\
+        --latent-dim 32 --hidden-dims "[256, 128]" --max-epochs 20 --batch-size 256
+
     # Skip ingestion (only run transformations + feast)
     python run_kronodroid_pipeline.py --skip-ingestion
 
@@ -28,6 +39,8 @@ Transform Engines:
     dbt       - Local DuckDB-based transformations (default)
     kubeflow  - Kubeflow SparkOperator with Iceberg/Avro output via LakeFS
 """
+
+from __future__ import annotations
 
 import argparse
 import os
@@ -487,8 +500,8 @@ def run_kubeflow_transformations(
     if use_kfp_client:
         return _run_kubeflow_via_kfp_client(
             kfp_host=kfp_host,
-            minio_endpoint=minio_cluster_endpoint,
-            minio_bucket=minio_bucket,
+            minio_endpoint=raw_endpoint,
+            minio_bucket=raw_bucket,
             minio_prefix=raw_prefix,
             lakefs_endpoint=lakefs_cluster_endpoint,
             lakefs_repository=lakefs_repository,
@@ -722,6 +735,12 @@ def _run_kubeflow_via_sparkapplication(
             ] + (["--test-limit", str(test_limit)] if test_limit > 0 else []),
             "sparkVersion": "3.5.0",
             "restartPolicy": {"type": "Never"},
+            # Enable Spark UI for monitoring - creates a service for port-forwarding
+            "sparkUIOptions": {
+                "serviceType": "ClusterIP",
+                "servicePort": 4040,
+                "servicePortName": "spark-ui",
+            },
             "driver": {
                 "cores": driver_cores,
                 "memory": driver_memory,
@@ -796,6 +815,7 @@ def _run_kubeflow_via_sparkapplication(
                 body=spark_app,
             )
             print(f"  Submitted SparkApplication: {app_name}")
+            print(f"  Spark UI: Run 'task spark:ui APP={app_name}' to monitor")
         except client.ApiException as e:
             if e.status == 409:
                 print(f"  SparkApplication {app_name} exists, deleting and recreating...")
@@ -1201,6 +1221,148 @@ def run_feast_materialize(days_back: int = 30) -> bool:
         return False
 
 
+def run_autoencoder_training(
+    kfp_host: str | None = None,
+    lakefs_endpoint: str | None = None,
+    lakefs_repository: str | None = None,
+    lakefs_ref: str = "main",
+    lakefs_secret_name: str = "lakefs-credentials",
+    minio_endpoint: str | None = None,
+    minio_secret_name: str = "minio-credentials",
+    mlflow_tracking_uri: str = "http://mlflow:5000",
+    mlflow_experiment_name: str = "kronodroid-autoencoder",
+    mlflow_model_name: str = "kronodroid_autoencoder",
+    latent_dim: int = 16,
+    hidden_dims_json: str = "[128, 64]",
+    batch_size: int = 512,
+    max_epochs: int = 10,
+    seed: int = 1337,
+    timeout_seconds: int = 3600,
+    namespace: str = "dfp",
+) -> bool:
+    """Train a Kronodroid autoencoder using KFP pipeline.
+
+    This submits the autoencoder training pipeline to Kubeflow Pipelines,
+    which will:
+    - Read features from Feast (backed by LakeFS Iceberg tables)
+    - Train a PyTorch Lightning autoencoder
+    - Register the model in MLflow
+
+    Args:
+        kfp_host: Kubeflow Pipelines host URL
+        lakefs_endpoint: LakeFS endpoint (defaults to env var)
+        lakefs_repository: LakeFS repository (defaults to env var)
+        lakefs_ref: LakeFS branch/commit to read data from
+        lakefs_secret_name: K8s secret name for LakeFS credentials
+        minio_endpoint: MinIO endpoint for MLflow artifacts (defaults to env var)
+        minio_secret_name: K8s secret name for MinIO credentials
+        mlflow_tracking_uri: MLflow tracking server URI
+        mlflow_experiment_name: MLflow experiment name
+        mlflow_model_name: Name for registered model
+        latent_dim: Autoencoder latent dimension
+        hidden_dims_json: Hidden layer dimensions as JSON array
+        batch_size: Training batch size
+        max_epochs: Maximum training epochs
+        seed: Random seed for reproducibility
+        timeout_seconds: Max time to wait for training
+        namespace: Kubernetes namespace
+
+    Returns:
+        True if successful
+    """
+    print("\n" + "=" * 60)
+    print("Running Autoencoder Training Pipeline")
+    print("=" * 60)
+
+    try:
+        import kfp
+        from orchestration.kubeflow.dfp_kfp.pipelines.kronodroid_autoencoder_pipeline import (
+            kronodroid_autoencoder_training_pipeline,
+        )
+    except ImportError as e:
+        print(f"ERROR: KFP not installed or pipeline not found: {e}")
+        print("Install with: pip install kfp kfp-kubernetes")
+        return False
+
+    # Get configuration from environment if not provided
+    lakefs_endpoint = lakefs_endpoint or os.getenv("LAKEFS_ENDPOINT_URL", "http://lakefs:8000")
+    lakefs_repository = lakefs_repository or os.getenv("LAKEFS_REPOSITORY", "kronodroid")
+    minio_endpoint = minio_endpoint or os.getenv("MINIO_ENDPOINT_URL", "http://minio:9000")
+
+    # Rewrite localhost to in-cluster DNS if running locally
+    if _is_localhost_url(lakefs_endpoint):
+        lakefs_cluster_endpoint = _k8s_service_url("lakefs", namespace, 8000)
+    else:
+        lakefs_cluster_endpoint = lakefs_endpoint
+
+    if _is_localhost_url(minio_endpoint):
+        minio_cluster_endpoint = _k8s_service_url("minio", namespace, 9000)
+    else:
+        minio_cluster_endpoint = minio_endpoint
+
+    if _is_localhost_url(mlflow_tracking_uri):
+        mlflow_cluster_uri = _k8s_service_url("mlflow", namespace, 5000)
+    else:
+        mlflow_cluster_uri = mlflow_tracking_uri
+
+    if not kfp_host:
+        kfp_host = os.getenv("KFP_HOST", "http://localhost:8080")
+
+    print(f"  KFP host: {kfp_host}")
+    print(f"  LakeFS endpoint (cluster): {lakefs_cluster_endpoint}")
+    print(f"  LakeFS repository: {lakefs_repository}")
+    print(f"  LakeFS ref: {lakefs_ref}")
+    print(f"  MLflow tracking URI (cluster): {mlflow_cluster_uri}")
+    print(f"  MLflow experiment: {mlflow_experiment_name}")
+    print(f"  Model name: {mlflow_model_name}")
+    print(f"  Hyperparameters: latent_dim={latent_dim}, hidden_dims={hidden_dims_json}")
+    print(f"  Training: batch_size={batch_size}, max_epochs={max_epochs}, seed={seed}")
+
+    try:
+        client = kfp.Client(host=kfp_host)
+
+        run = client.create_run_from_pipeline_func(
+            kronodroid_autoencoder_training_pipeline,
+            arguments={
+                "lakefs_endpoint": lakefs_cluster_endpoint,
+                "lakefs_repository": lakefs_repository,
+                "lakefs_ref": lakefs_ref,
+                "lakefs_secret_name": lakefs_secret_name,
+                "minio_endpoint": minio_cluster_endpoint,
+                "minio_secret_name": minio_secret_name,
+                "mlflow_tracking_uri": mlflow_cluster_uri,
+                "mlflow_experiment_name": mlflow_experiment_name,
+                "mlflow_model_name": mlflow_model_name,
+                "latent_dim": latent_dim,
+                "hidden_dims_json": hidden_dims_json,
+                "batch_size": batch_size,
+                "max_epochs": max_epochs,
+                "seed": seed,
+            },
+            experiment_name=mlflow_experiment_name,
+            run_name=f"autoencoder-training-{lakefs_ref}",
+        )
+
+        print(f"  Submitted KFP run: {run.run_id}")
+        print(f"  View at: {kfp_host}/#/runs/details/{run.run_id}")
+
+        # Wait for completion
+        result = client.wait_for_run_completion(run.run_id, timeout=timeout_seconds)
+
+        if result.run.status == "Succeeded":
+            print("Autoencoder training completed successfully")
+            return True
+        else:
+            print(f"ERROR: Autoencoder training failed with status: {result.run.status}")
+            return False
+
+    except Exception as e:
+        print(f"ERROR: Autoencoder training pipeline failed: {e}")
+        import traceback
+        traceback.print_exc()
+        return False
+
+
 def commit_to_lakefs(branch: str, message: str) -> bool:
     """Commit changes to LakeFS.
 
@@ -1362,6 +1524,57 @@ def main():
         help="Limit rows per source table for testing (0 = no limit, e.g., 1000 for quick tests)",
     )
 
+    # Autoencoder training options
+    parser.add_argument(
+        "--train-autoencoder",
+        action="store_true",
+        help="Train autoencoder after transformations complete",
+    )
+    parser.add_argument(
+        "--autoencoder-only",
+        action="store_true",
+        help="Only run autoencoder training (assumes data already exists in LakeFS)",
+    )
+    parser.add_argument(
+        "--mlflow-tracking-uri",
+        default="http://mlflow:5000",
+        help="MLflow tracking server URI (default: http://mlflow:5000)",
+    )
+    parser.add_argument(
+        "--mlflow-experiment",
+        default="kronodroid-autoencoder",
+        help="MLflow experiment name (default: kronodroid-autoencoder)",
+    )
+    parser.add_argument(
+        "--latent-dim",
+        type=int,
+        default=16,
+        help="Autoencoder latent dimension (default: 16)",
+    )
+    parser.add_argument(
+        "--hidden-dims",
+        default="[128, 64]",
+        help="Autoencoder hidden layer dimensions as JSON array (default: '[128, 64]')",
+    )
+    parser.add_argument(
+        "--batch-size",
+        type=int,
+        default=512,
+        help="Training batch size (default: 512)",
+    )
+    parser.add_argument(
+        "--max-epochs",
+        type=int,
+        default=10,
+        help="Maximum training epochs (default: 10)",
+    )
+    parser.add_argument(
+        "--training-seed",
+        type=int,
+        default=1337,
+        help="Random seed for training reproducibility (default: 1337)",
+    )
+
     args = parser.parse_args()
 
     # Load environment variables
@@ -1387,16 +1600,41 @@ def main():
     print(f"  Destination: {args.destination}")
     if args.destination == "lakefs":
         print(f"  Branch: {args.branch}")
+    if args.autoencoder_only:
+        print("  Mode: Autoencoder training only")
+    elif args.train_autoencoder:
+        print("  Mode: Full pipeline with autoencoder training")
     print(f"  Transform engine: {transform_engine}")
     if transform_engine == "dbt":
         print(f"  dbt target: {dbt_target}")
     else:
         print(f"  Spark image: {args.spark_image}")
         print(f"  K8s namespace: {args.k8s_namespace}")
+    if args.train_autoencoder or args.autoencoder_only:
+        print(f"  Autoencoder: latent_dim={args.latent_dim}, hidden_dims={args.hidden_dims}")
+        print(f"  Training: epochs={args.max_epochs}, batch_size={args.batch_size}")
 
     success = True
 
-    if args.materialize_only:
+    # Handle autoencoder-only mode
+    if args.autoencoder_only:
+        if args.destination != "lakefs":
+            print("ERROR: --autoencoder-only requires --destination lakefs")
+            sys.exit(1)
+        success = run_autoencoder_training(
+            kfp_host=args.kfp_host,
+            lakefs_ref=args.branch,
+            namespace=args.k8s_namespace,
+            mlflow_tracking_uri=args.mlflow_tracking_uri,
+            mlflow_experiment_name=args.mlflow_experiment,
+            latent_dim=args.latent_dim,
+            hidden_dims_json=args.hidden_dims,
+            batch_size=args.batch_size,
+            max_epochs=args.max_epochs,
+            seed=args.training_seed,
+            timeout_seconds=args.spark_timeout,
+        )
+    elif args.materialize_only:
         success = run_feast_materialize(args.materialize_days)
     else:
         # Step 1: dlt ingestion
@@ -1463,7 +1701,28 @@ def main():
         if not run_feast_materialize(args.materialize_days):
             print("\nWARNING: Feature materialization failed (online store may be unavailable)")
 
-        # Step 5: Commit to LakeFS (if using lakefs)
+        # Step 5: Autoencoder training (if requested)
+        if args.train_autoencoder:
+            if args.destination != "lakefs":
+                print("WARNING: --train-autoencoder works best with --destination lakefs")
+            if not run_autoencoder_training(
+                kfp_host=args.kfp_host,
+                lakefs_ref=args.branch,
+                namespace=args.k8s_namespace,
+                mlflow_tracking_uri=args.mlflow_tracking_uri,
+                mlflow_experiment_name=args.mlflow_experiment,
+                latent_dim=args.latent_dim,
+                hidden_dims_json=args.hidden_dims,
+                batch_size=args.batch_size,
+                max_epochs=args.max_epochs,
+                seed=args.training_seed,
+                timeout_seconds=args.spark_timeout,
+            ):
+                success = False
+                print("\nPipeline failed at autoencoder training step")
+                sys.exit(1)
+
+        # Step 6: Commit to LakeFS (if using lakefs)
         if args.destination == "lakefs":
             commit_to_lakefs(
                 args.branch,

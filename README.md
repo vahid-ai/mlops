@@ -30,6 +30,7 @@ See inline README stubs and doc files under `docs/` for guidance on how each pac
   - Linux/macOS (script): `sh -c "$(curl --location https://taskfile.dev/install.sh)" -- -d -b ~/.local/bin`
   - Windows: `choco install go-task` (or `scoop install task`)
 - Direct: create a local cluster and deploy the data/metadata plane via `tools/scripts/kind_bootstrap.sh` (uses `infra/k8s/kind/kind-config.yaml` and `infra/k8s/kind/manifests`).
+- Full setup with Kubeflow Pipelines: `task up:full` (includes KFP installation).
 - `task up` starts port-forwards by default (`PORT_FORWARD=1`); disable with `PORT_FORWARD=0 task up`. You can also run `task port-forward`, `task port-forward:status`, and `task port-forward:stop`.
 - Services available on host:
   - LakeFS: `http://localhost:8000`
@@ -38,6 +39,36 @@ See inline README stubs and doc files under `docs/` for guidance on how each pac
   - MLflow: `http://localhost:5050`
   - Redis: `127.0.0.1:16379` (use `redis-cli -h 127.0.0.1 -p 16379 ping`)
 - For cloud, reuse the same manifests with overlays to swap NodePort → LoadBalancer/Ingress and point LakeFS/MLflow at managed object storage + Postgres.
+
+### Kubeflow Pipelines
+
+Kubeflow Pipelines (KFP) is used for ML pipeline orchestration. Install and manage with:
+
+```bash
+# Install KFP (standalone, no auth)
+task kfp:install
+
+# Check KFP status
+task kfp:status
+
+# Port-forward KFP UI to http://localhost:8080
+task kfp:port-forward
+
+# View KFP component logs
+COMPONENT=ml-pipeline task kfp:logs
+
+# Uninstall KFP
+task kfp:uninstall
+```
+
+Compile pipelines to YAML using the notebook at `notebooks/compile_kronodroid_autoencoder_pipeline.ipynb` or programmatically:
+
+```python
+from orchestration.kubeflow.dfp_kfp.pipelines.kronodroid_autoencoder_pipeline import (
+    compile_kronodroid_autoencoder_pipeline,
+)
+compile_kronodroid_autoencoder_pipeline("kronodroid_autoencoder_pipeline.yaml")
+```
 
 ## Kronodroid Data Pipeline
 
@@ -63,12 +94,56 @@ docker build -t dfp-spark:latest -f tools/docker/Dockerfile.spark .
 kind load docker-image dfp-spark:latest --name dfp-kind
 python tools/scripts/run_kronodroid_pipeline.py --destination lakefs --transform-engine kubeflow --k8s-namespace dfp
 
+# Full pipeline with autoencoder training at the end
+python tools/scripts/run_kronodroid_pipeline.py --destination lakefs --transform-engine kubeflow --train-autoencoder
+
+# Only run autoencoder training (assumes data already in LakeFS)
+python tools/scripts/run_kronodroid_pipeline.py --destination lakefs --autoencoder-only --branch main
+
+# Autoencoder with custom hyperparameters
+python tools/scripts/run_kronodroid_pipeline.py --destination lakefs --autoencoder-only \
+    --latent-dim 32 --hidden-dims "[256, 128]" --max-epochs 20 --batch-size 256
+
 # Skip ingestion (if data already loaded)
 python tools/scripts/run_kronodroid_pipeline.py --skip-ingestion
 
 # Only materialize features to Redis
 python tools/scripts/run_kronodroid_pipeline.py --materialize-only
 ```
+
+### Spark Job Monitoring
+
+Monitor Spark jobs running on Kubernetes using these task commands:
+
+```bash
+# List all SparkApplications and their status
+task spark:jobs
+
+# Port-forward to Spark UI (http://localhost:4040)
+APP=kronodroid-iceberg-abc123 task spark:ui
+
+# Tail Spark driver logs
+APP=kronodroid-iceberg-abc123 task spark:logs
+
+# Describe a SparkApplication
+APP=kronodroid-iceberg-abc123 task spark:describe
+
+# Show recent Spark-related events
+task spark:events
+
+# Kill a specific SparkApplication
+APP=kronodroid-iceberg-abc123 task spark:kill
+
+# Kill all SparkApplications
+APP=all task spark:kill
+```
+
+The Spark UI at http://localhost:4040 shows:
+- **Jobs** - Active/completed Spark jobs
+- **Stages** - Stage progress and task distribution
+- **Storage** - Cached DataFrames
+- **Executors** - Resource usage per executor
+- **SQL** - Query plans and execution details
 
 ### Pipeline Components
 

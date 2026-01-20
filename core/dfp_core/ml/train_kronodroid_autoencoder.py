@@ -130,6 +130,7 @@ def train_and_register(
             split="train",
             feast_feature_refs=feature_refs,
             max_rows=max_rows_per_split,
+            ensure_registry=True,
         )
         val_df = load_split_as_pandas(
             feature_store_yaml_path=feature_store_yaml_path,

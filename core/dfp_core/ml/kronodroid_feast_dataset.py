@@ -5,7 +5,9 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import sys
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Iterable
 
 
@@ -61,6 +63,48 @@ def _spark_session_from_feature_store_yaml(feature_store_yaml_path: str):
     return builder.getOrCreate()
 
 
+def _repo_root() -> Path:
+    # core/dfp_core/ml/kronodroid_feast_dataset.py -> repo root
+    return Path(__file__).resolve().parents[3]
+
+
+def _ensure_dfp_feast_importable() -> None:
+    feast_repo = _repo_root() / "feature_stores" / "feast_store"
+    sys.path.insert(0, str(feast_repo))
+
+
+def ensure_feast_registry(
+    *,
+    feature_store_yaml_path: str,
+    only_feature_views: list[str] | None = None,
+) -> None:
+    """Create/update the Feast registry inside the current environment.
+
+    This is important inside KFP pods where the registry isn't persisted across runs.
+    """
+    from feast import FeatureStore
+    from feast.repo_config import RepoConfig
+
+    _ensure_dfp_feast_importable()
+    import dfp_feast  # type: ignore[import-not-found]
+
+    repo_cfg = RepoConfig.from_yaml(feature_store_yaml_path)
+    store = FeatureStore(config=repo_cfg)
+
+    objects: list[Any] = [dfp_feast.malware_sample, dfp_feast.malware_family]
+    feature_views: dict[str, Any] = {
+        "kronodroid_autoencoder_features": dfp_feast.kronodroid_autoencoder_features,
+        "malware_sample_features": dfp_feast.malware_sample_features,
+        "malware_family_features": dfp_feast.malware_family_features,
+        "malware_batch_features": dfp_feast.malware_batch_features,
+    }
+    for name, fv in feature_views.items():
+        if only_feature_views is None or name in only_feature_views:
+            objects.append(fv)
+
+    store.apply(objects)
+
+
 def load_split_as_pandas(
     *,
     feature_store_yaml_path: str,
@@ -75,6 +119,7 @@ def load_split_as_pandas(
     timestamp_column: str = "event_timestamp",
     split_column: str = "dataset_split",
     max_rows: int | None = None,
+    ensure_registry: bool = False,
 ) -> "Any":
     """Load one split via Feast (Spark offline store) into a pandas DataFrame."""
     _set_lakefs_env(lakefs_repository, lakefs_ref)
@@ -82,6 +127,12 @@ def load_split_as_pandas(
     from feast import FeatureStore
     from feast.repo_config import RepoConfig
     from pyspark.sql import functions as F
+
+    if ensure_registry and feast_feature_refs:
+        ensure_feast_registry(
+            feature_store_yaml_path=feature_store_yaml_path,
+            only_feature_views=[feast_feature_refs[0].split(":", 1)[0]],
+        )
 
     repo_cfg = RepoConfig.from_yaml(feature_store_yaml_path)
     store = FeatureStore(config=repo_cfg)

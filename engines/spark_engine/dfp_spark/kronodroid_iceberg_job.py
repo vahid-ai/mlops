@@ -23,7 +23,6 @@ from typing import TYPE_CHECKING, List
 
 from pyspark.sql import SparkSession, DataFrame
 from pyspark.sql import functions as F
-from pyspark.sql.window import Window
 from functools import reduce
 
 if TYPE_CHECKING:
@@ -154,15 +153,13 @@ def create_stg_combined(
     """
     combined = stg_emulator.unionByName(stg_real_device, allowMissingColumns=True)
 
-    # Add sample_id using row_number
-    # Handle case where _ingestion_timestamp might not exist
-    if "_ingestion_timestamp" in combined.columns:
-        order_cols = [F.col("data_source"), F.col("_ingestion_timestamp")]
-    else:
-        order_cols = [F.col("data_source")]
-
-    window = Window.orderBy(*order_cols)
-    return combined.withColumn("sample_id", F.row_number().over(window))
+    # Add sample_id using monotonically_increasing_id for performance
+    # This is MUCH faster than ROW_NUMBER with global ORDER BY because:
+    # - ROW_NUMBER requires a full shuffle to a single partition for global ordering
+    # - monotonically_increasing_id generates unique IDs without shuffling
+    # The IDs are guaranteed unique within the DataFrame but may have gaps.
+    # This is acceptable since sample_id just needs to be unique, not sequential.
+    return combined.withColumn("sample_id", F.monotonically_increasing_id())
 
 
 def ensure_kronodroid_feature_columns(df: DataFrame) -> DataFrame:
@@ -319,7 +316,10 @@ def write_iceberg_table(
         "write.avro.compression-codec", "snappy"
     ).using("iceberg").createOrReplace()
 
-    print(f"Successfully wrote {df.count()} rows to {full_table_name}")
+    # Note: Removed df.count() here - it was causing a full re-computation of the DataFrame
+    # after every write, which was extremely slow. The count is redundant since Iceberg
+    # writes already compute the data.
+    print(f"Successfully wrote to {full_table_name}")
 
 
 def ensure_databases(spark: SparkSession, catalog: str, databases: List[str]) -> None:
@@ -367,22 +367,24 @@ def main() -> int:
 
         # Step 1: Read raw data from storage
         # dlt uses these table names from the Kronodroid Kaggle dataset
-        print("\n[1/7] Reading raw emulator data...")
+        print("\n[1/8] Reading raw emulator data...")
         raw_emulator = read_raw_data(
             spark, args.minio_bucket, args.minio_prefix, "kronodroid_2021_emu_v1",
             limit=args.test_limit,
         )
-        print(f"  Rows: {raw_emulator.count()}")
+        # Note: Removed .count() here - it triggers a full read action unnecessarily
+        # The actual row count will be visible in the Iceberg write output
+        print("  DataFrame loaded (count deferred to write)")
 
-        print("\n[2/7] Reading raw real_device data...")
+        print("\n[2/8] Reading raw real_device data...")
         raw_real_device = read_raw_data(
             spark, args.minio_bucket, args.minio_prefix, "kronodroid_2021_real_v1",
             limit=args.test_limit,
         )
-        print(f"  Rows: {raw_real_device.count()}")
+        print("  DataFrame loaded (count deferred to write)")
 
         # Step 2: Create staging tables
-        print("\n[3/7] Creating stg_kronodroid__emulator...")
+        print("\n[3/8] Creating stg_kronodroid__emulator...")
         stg_emulator = create_stg_emulator(raw_emulator)
         write_iceberg_table(
             stg_emulator,
@@ -391,7 +393,7 @@ def main() -> int:
             "stg_kronodroid__emulator",
         )
 
-        print("\n[4/7] Creating stg_kronodroid__real_device...")
+        print("\n[4/8] Creating stg_kronodroid__real_device...")
         stg_real_device = create_stg_real_device(raw_real_device)
         write_iceberg_table(
             stg_real_device,
@@ -400,8 +402,11 @@ def main() -> int:
             "stg_kronodroid__real_device",
         )
 
-        print("\n[5/7] Creating stg_kronodroid__combined...")
+        print("\n[5/8] Creating stg_kronodroid__combined...")
         stg_combined = create_stg_combined(stg_emulator, stg_real_device)
+        # Cache stg_combined since it's reused by fct_malware_samples, dim_malware_families
+        # Without caching, the expensive union + window function would be recomputed 3x
+        stg_combined.cache()
         write_iceberg_table(
             stg_combined,
             args.catalog_name,
@@ -410,8 +415,10 @@ def main() -> int:
         )
 
         # Step 3: Create mart tables
-        print("\n[6/7] Creating fct_malware_samples...")
+        print("\n[6/8] Creating fct_malware_samples...")
         fct_samples = create_fct_malware_samples(stg_combined)
+        # Cache fct_samples since it's reused by fct_training_dataset
+        fct_samples.cache()
         write_iceberg_table(
             fct_samples,
             args.catalog_name,
@@ -419,7 +426,7 @@ def main() -> int:
             "fct_malware_samples",
         )
 
-        print("\n[7/7] Creating dim_malware_families...")
+        print("\n[7/8] Creating dim_malware_families...")
         dim_families = create_dim_malware_families(stg_combined)
         write_iceberg_table(
             dim_families,
@@ -428,7 +435,7 @@ def main() -> int:
             "dim_malware_families",
         )
 
-        print("\n[8/7] Creating fct_training_dataset...")
+        print("\n[8/8] Creating fct_training_dataset...")
         fct_training = create_fct_training_dataset(fct_samples)
         write_iceberg_table(
             fct_training,
@@ -436,6 +443,10 @@ def main() -> int:
             args.marts_database,
             "fct_training_dataset",
         )
+
+        # Clean up cached DataFrames
+        stg_combined.unpersist()
+        fct_samples.unpersist()
 
         print("\n" + "=" * 60)
         print("Kronodroid Iceberg transformations completed successfully!")

@@ -6,6 +6,8 @@ vars:
   KUSTOMIZE_DIR: '{{.KUSTOMIZE_DIR | default "./infra/k8s/kind/manifests"}}'
   NAMESPACE: '{{.NAMESPACE | default "dfp"}}'
   PORT_FORWARD: '{{.PORT_FORWARD | default "1"}}'
+  KFP_VERSION: '{{.KFP_VERSION | default "2.15.0"}}'
+  KFP_NAMESPACE: '{{.KFP_NAMESPACE | default "kubeflow"}}'
 
 tasks:
   tools:
@@ -165,3 +167,214 @@ tasks:
       - echo ""
       - echo "SparkApplications in {{.NAMESPACE}}:"
       - kubectl -n "{{.NAMESPACE}}" get sparkapplications 2>/dev/null || echo "  (none or CRD not installed)"
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # Spark UI Monitoring
+  # ─────────────────────────────────────────────────────────────────────────────
+
+  spark:jobs:
+    desc: List SparkApplications and their status
+    cmds:
+      - |
+          echo "SparkApplications in {{.NAMESPACE}}:"
+          kubectl -n "{{.NAMESPACE}}" get sparkapplications -o wide 2>/dev/null || echo "  (none found)"
+          echo ""
+          echo "Spark driver pods:"
+          kubectl -n "{{.NAMESPACE}}" get pods -l spark-role=driver 2>/dev/null || echo "  (none running)"
+
+  spark:ui:
+    desc: Port-forward to Spark UI for a running job (APP=sparkapplication-name)
+    cmds:
+      - |
+          APP="${APP:-{{.CLI_ARGS}}}"
+          APP="${APP:-}"
+          NAMESPACE="{{.NAMESPACE}}"
+
+          if [ -z "$APP" ]; then
+            echo "Usage: task spark:ui APP=<sparkapplication-name>"
+            echo "   or: task spark:ui -- <sparkapplication-name>"
+            echo ""
+            echo "Running SparkApplications:"
+            kubectl -n "$NAMESPACE" get sparkapplications -o custom-columns=NAME:.metadata.name,STATE:.status.applicationState.state 2>/dev/null || echo "  (none)"
+            echo ""
+            echo "Example: task spark:ui APP=kronodroid-iceberg-abc123"
+            exit 0
+          fi
+
+          # Find the Spark UI service created by the operator
+          SVC_NAME="${APP}-ui-svc"
+          if ! kubectl -n "$NAMESPACE" get svc "$SVC_NAME" >/dev/null 2>&1; then
+            # Try alternative service naming
+            SVC_NAME="${APP}-driver-svc"
+            if ! kubectl -n "$NAMESPACE" get svc "$SVC_NAME" >/dev/null 2>&1; then
+              echo "Spark UI service not found for $APP"
+              echo "Make sure the SparkApplication has sparkUIOptions configured"
+              echo ""
+              echo "Trying direct port-forward to driver pod..."
+              DRIVER_POD="${APP}-driver"
+              if kubectl -n "$NAMESPACE" get pod "$DRIVER_POD" >/dev/null 2>&1; then
+                echo "Port-forwarding to driver pod $DRIVER_POD:4040"
+                echo "Open http://localhost:4040 in your browser"
+                kubectl -n "$NAMESPACE" port-forward pod/"$DRIVER_POD" 4040:4040
+              else
+                echo "Driver pod $DRIVER_POD not found"
+                echo ""
+                echo "Available driver pods:"
+                kubectl -n "$NAMESPACE" get pods -l spark-role=driver 2>/dev/null || echo "  (none running)"
+                exit 1
+              fi
+              exit 0
+            fi
+          fi
+          echo "Port-forwarding Spark UI to http://localhost:4040"
+          echo "Press Ctrl+C to stop"
+          kubectl -n "$NAMESPACE" port-forward svc/"$SVC_NAME" 4040:4040
+
+  spark:logs:
+    desc: Tail Spark driver logs (APP=sparkapplication-name)
+    cmds:
+      - |
+          APP="${APP:-{{.CLI_ARGS}}}"
+          APP="${APP:-}"
+          NAMESPACE="{{.NAMESPACE}}"
+
+          if [ -z "$APP" ]; then
+            echo "Usage: task spark:logs APP=<sparkapplication-name>"
+            echo "   or: task spark:logs -- <sparkapplication-name>"
+            echo ""
+            echo "Running Spark driver pods:"
+            kubectl -n "$NAMESPACE" get pods -l spark-role=driver -o custom-columns=NAME:.metadata.name,STATUS:.status.phase 2>/dev/null || echo "  (none)"
+            exit 0
+          fi
+          kubectl -n "$NAMESPACE" logs "${APP}-driver" -f --tail=500
+
+  spark:describe:
+    desc: Describe a SparkApplication (APP=sparkapplication-name)
+    cmds:
+      - |
+          APP="${APP:-{{.CLI_ARGS}}}"
+          APP="${APP:-}"
+          NAMESPACE="{{.NAMESPACE}}"
+
+          if [ -z "$APP" ]; then
+            echo "Usage: task spark:describe APP=<sparkapplication-name>"
+            echo "   or: task spark:describe -- <sparkapplication-name>"
+            echo ""
+            echo "Available SparkApplications:"
+            kubectl -n "$NAMESPACE" get sparkapplications -o name 2>/dev/null | sed 's|sparkapplication.sparkoperator.k8s.io/||' || echo "  (none)"
+            exit 0
+          fi
+          kubectl -n "$NAMESPACE" describe sparkapplication "$APP"
+
+  spark:kill:
+    desc: Kill a SparkApplication (APP=name, or APP=all to kill all)
+    cmds:
+      - |
+          APP="${APP:-{{.CLI_ARGS}}}"
+          APP="${APP:-}"
+          NAMESPACE="{{.NAMESPACE}}"
+
+          if [ -z "$APP" ]; then
+            echo "Usage: task spark:kill APP=<sparkapplication-name>"
+            echo "   or: task spark:kill APP=all  (kill all SparkApplications)"
+            echo ""
+            echo "Running SparkApplications:"
+            kubectl -n "$NAMESPACE" get sparkapplications -o custom-columns=NAME:.metadata.name,STATE:.status.applicationState.state 2>/dev/null || echo "  (none)"
+            exit 0
+          fi
+
+          if [ "$APP" = "all" ]; then
+            echo "Killing all SparkApplications in $NAMESPACE..."
+            kubectl -n "$NAMESPACE" delete sparkapplications --all
+          else
+            echo "Killing SparkApplication: $APP"
+            kubectl -n "$NAMESPACE" delete sparkapplication "$APP"
+          fi
+
+  spark:events:
+    desc: Show recent Spark-related events
+    cmds:
+      - |
+          echo "Recent Spark events in {{.NAMESPACE}}:"
+          kubectl -n "{{.NAMESPACE}}" get events --sort-by='.lastTimestamp' | grep -i spark | tail -30 || echo "  (no spark events)"
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # Kubeflow Pipelines
+  # ─────────────────────────────────────────────────────────────────────────────
+
+  kfp:install:
+    desc: Install Kubeflow Pipelines (standalone, no auth)
+    cmds:
+      - echo "Installing Kubeflow Pipelines v{{.KFP_VERSION}}..."
+      - |
+          # Apply cluster-scoped resources (CRDs)
+          kubectl apply -k "github.com/kubeflow/pipelines/manifests/kustomize/cluster-scoped-resources?ref={{.KFP_VERSION}}"
+      - |
+          # Wait for CRDs to be established
+          kubectl wait --for condition=established --timeout=60s crd/applications.app.k8s.io || true
+      - |
+          # Apply KFP platform-agnostic deployment with emissary executor
+          kubectl apply -k "github.com/kubeflow/pipelines/manifests/kustomize/env/platform-agnostic?ref={{.KFP_VERSION}}"
+      - echo "Waiting for KFP deployments to be ready (this may take a few minutes)..."
+      - kubectl -n "{{.KFP_NAMESPACE}}" wait --for=condition=available deployment --all --timeout=600s
+      - |
+          echo ""
+          echo "Kubeflow Pipelines installed successfully!"
+          echo "  Namespace: {{.KFP_NAMESPACE}}"
+          echo "  UI: Run 'task kfp:port-forward' then open http://localhost:8080"
+
+  kfp:uninstall:
+    desc: Uninstall Kubeflow Pipelines
+    cmds:
+      - echo "Uninstalling Kubeflow Pipelines..."
+      - kubectl delete -k "github.com/kubeflow/pipelines/manifests/kustomize/env/platform-agnostic?ref={{.KFP_VERSION}}" --ignore-not-found
+      - kubectl delete -k "github.com/kubeflow/pipelines/manifests/kustomize/cluster-scoped-resources?ref={{.KFP_VERSION}}" --ignore-not-found
+      - kubectl delete namespace "{{.KFP_NAMESPACE}}" --ignore-not-found
+      - echo "Kubeflow Pipelines uninstalled"
+
+  kfp:status:
+    desc: Show Kubeflow Pipelines status
+    cmds:
+      - |
+          if kubectl get namespace "{{.KFP_NAMESPACE}}" >/dev/null 2>&1; then
+            echo "Kubeflow Pipelines namespace: {{.KFP_NAMESPACE}}"
+            echo ""
+            echo "Deployments:"
+            kubectl -n "{{.KFP_NAMESPACE}}" get deployments
+            echo ""
+            echo "Pods:"
+            kubectl -n "{{.KFP_NAMESPACE}}" get pods
+            echo ""
+            echo "Services:"
+            kubectl -n "{{.KFP_NAMESPACE}}" get svc
+          else
+            echo "Kubeflow Pipelines is not installed (namespace {{.KFP_NAMESPACE}} not found)"
+          fi
+
+  kfp:port-forward:
+    desc: Port-forward KFP UI to localhost:8080
+    cmds:
+      - echo "Port-forwarding KFP UI to http://localhost:8080"
+      - echo "Press Ctrl+C to stop"
+      - kubectl -n "{{.KFP_NAMESPACE}}" port-forward svc/ml-pipeline-ui 8080:80
+
+  kfp:logs:
+    desc: Tail KFP component logs (COMPONENT=ml-pipeline|ml-pipeline-ui|workflow-controller|etc)
+    vars:
+      COMPONENT: '{{.COMPONENT | default "ml-pipeline"}}'
+    cmds:
+      - |
+          if [ "{{.COMPONENT}}" = "" ]; then
+            echo "Available components:"
+            kubectl -n "{{.KFP_NAMESPACE}}" get deployments -o name | sed 's|deployment.apps/||'
+            exit 0
+          fi
+      - kubectl -n "{{.KFP_NAMESPACE}}" logs deployment/"{{.COMPONENT}}" -f --tail=200
+
+  up:full:
+    desc: Create kind cluster with all services including KFP
+    cmds:
+      - task: kind:up
+      - task: spark-operator:install
+      - task: spark-image
+      - task: kfp:install

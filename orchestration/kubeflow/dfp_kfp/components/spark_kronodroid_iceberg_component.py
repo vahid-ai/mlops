@@ -31,7 +31,7 @@ spec:
   mode: cluster
   image: {spark_image}
   imagePullPolicy: Always
-  mainApplicationFile: local:///opt/spark/jobs/kronodroid_iceberg_job.py
+  mainApplicationFile: local:///opt/spark/work-dir/kronodroid_iceberg_job.py
   arguments:
     - "--minio-bucket"
     - "{minio_bucket}"
@@ -438,7 +438,7 @@ spec:
   mode: cluster
   image: {spark_image}
   imagePullPolicy: Always
-  mainApplicationFile: local:///opt/spark/jobs/kronodroid_iceberg_job.py
+  mainApplicationFile: local:///opt/spark/work-dir/kronodroid_iceberg_job.py
   arguments:
     - "--minio-bucket"
     - "{minio_bucket}"
