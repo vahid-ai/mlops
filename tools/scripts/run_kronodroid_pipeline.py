@@ -194,24 +194,30 @@ def _ensure_k8s_prereqs(
     )
 
 
-def _sparkoperator_crd_supports_status() -> bool:
-    """Return True if the SparkApplication CRD defines the /status subresource."""
+def _check_sparkoperator_crd() -> tuple[bool, bool]:
+    """Check if the SparkApplication CRD exists and supports status subresource.
+
+    Returns:
+        Tuple of (crd_exists, supports_status)
+    """
     try:
         from kubernetes import client
         from kubernetes.client.rest import ApiException
     except Exception:
-        return False
+        return False, False
 
     api = client.ApiextensionsV1Api()
     try:
         crd = api.read_custom_resource_definition("sparkapplications.sparkoperator.k8s.io")
     except ApiException:
-        return False
+        return False, False
 
+    supports_status = False
     for version in crd.spec.versions or []:
         if version.name == "v1beta2" and version.subresources and version.subresources.status is not None:
-            return True
-    return False
+            supports_status = True
+            break
+    return True, supports_status
 
 
 def load_env_file(env_path: Path = PROJECT_ROOT / ".env"):
@@ -393,6 +399,7 @@ def run_kubeflow_transformations(
     timeout_seconds: int = 3600,
     use_kfp_client: bool = False,
     kfp_host: str | None = None,
+    test_limit: int = 0,
 ) -> bool:
     """Run Kubeflow SparkOperator transformations to build Iceberg tables.
 
@@ -420,6 +427,7 @@ def run_kubeflow_transformations(
         timeout_seconds: Max time to wait for Spark job
         use_kfp_client: If True, submit via KFP client; if False, submit SparkApplication directly
         kfp_host: Kubeflow Pipelines host (required if use_kfp_client=True)
+        test_limit: Limit rows per table for faster testing (0 = no limit)
 
     Returns:
         True if successful
@@ -520,6 +528,7 @@ def run_kubeflow_transformations(
             executor_instances=executor_instances,
             executor_memory=executor_memory,
             timeout_seconds=timeout_seconds,
+            test_limit=test_limit,
         )
 
 
@@ -624,6 +633,7 @@ def _run_kubeflow_via_sparkapplication(
     executor_instances: int,
     executor_memory: str,
     timeout_seconds: int,
+    test_limit: int = 0,
 ) -> bool:
     """Submit a SparkApplication directly via kubectl."""
     try:
@@ -633,6 +643,30 @@ def _run_kubeflow_via_sparkapplication(
         print(f"ERROR: kubernetes client not installed: {e}")
         print("Install with: pip install kubernetes")
         return False
+
+    # Load kubeconfig early so we can check CRD before creating branches
+    try:
+        config.load_incluster_config()
+    except config.ConfigException:
+        config.load_kube_config()
+
+    # Check if SparkOperator CRD is installed before creating any resources
+    crd_exists, crd_supports_status = _check_sparkoperator_crd()
+    if not crd_exists:
+        print("ERROR: SparkOperator CRD (sparkapplications.sparkoperator.k8s.io) not found.")
+        print("  The Spark Operator must be installed to use the kubeflow transform engine.")
+        print("  Install with Helm:")
+        print("    helm repo add spark-operator https://kubeflow.github.io/spark-operator")
+        print("    helm install spark-operator spark-operator/spark-operator \\")
+        print(f"      --namespace {namespace} --create-namespace")
+        print("  Or see: https://github.com/kubeflow/spark-operator")
+        return False
+
+    if not crd_supports_status:
+        print(
+            "  Note: SparkApplication CRD has no /status subresource; "
+            "SparkOperator can't report application state. Monitoring driver pod instead."
+        )
 
     run_id = str(uuid.uuid4())[:8]
     app_name = f"kronodroid-iceberg-{run_id}"
@@ -685,7 +719,7 @@ def _run_kubeflow_via_sparkapplication(
                 "--catalog-name", catalog_name,
                 "--staging-database", "stg_kronodroid",
                 "--marts-database", "kronodroid",
-            ],
+            ] + (["--test-limit", str(test_limit)] if test_limit > 0 else []),
             "sparkVersion": "3.5.0",
             "restartPolicy": {"type": "Never"},
             "driver": {
@@ -749,20 +783,8 @@ def _run_kubeflow_via_sparkapplication(
         )
 
     try:
-        # Load kubeconfig
-        try:
-            config.load_incluster_config()
-        except config.ConfigException:
-            config.load_kube_config()
-
         api = client.CustomObjectsApi()
         core_api = client.CoreV1Api()
-        crd_supports_status = _sparkoperator_crd_supports_status()
-        if not crd_supports_status:
-            print(
-                "  Note: SparkApplication CRD has no /status subresource; "
-                "SparkOperator can't report application state. Monitoring driver pod instead."
-            )
 
         # Submit SparkApplication
         try:
@@ -867,13 +889,17 @@ def _run_kubeflow_via_sparkapplication(
 
                 if app_state == "COMPLETED":
                     # Commit and merge the per-run branch
-                    if _commit_and_merge_lakefs(
+                    merge_success = _commit_and_merge_lakefs(
                         lakefs_api_endpoint, lakefs_repository, per_run_branch, lakefs_branch, run_id
-                    ):
+                    )
+                    if merge_success:
                         print("Kubeflow SparkOperator transformations completed successfully")
                         return True
                     else:
                         print("WARNING: LakeFS commit/merge failed, but Spark job succeeded")
+                        print(f"  Data is available on branch: {per_run_branch}")
+                        print(f"  You can manually merge with: lakectl merge lakefs://{lakefs_repository}/{per_run_branch} lakefs://{lakefs_repository}/{lakefs_branch}")
+                        # Still return True since Spark job succeeded - data is available on branch
                         return True
 
                 elif app_state in ("FAILED", "SUBMISSION_FAILED", "FAILING"):
@@ -938,7 +964,11 @@ def _create_lakefs_branch(
 def _commit_and_merge_lakefs(
     endpoint: str, repository: str, source_branch: str, target_branch: str, run_id: str
 ) -> bool:
-    """Commit and merge a per-run LakeFS branch."""
+    """Commit and merge a per-run LakeFS branch.
+
+    Returns:
+        True if successful, False if there was a fatal error.
+    """
     import requests
 
     access_key = os.getenv("LAKEFS_ACCESS_KEY_ID", "")
@@ -947,43 +977,150 @@ def _commit_and_merge_lakefs(
     api_base = endpoint.rstrip("/")
     auth = (access_key, secret_key)
 
-    # Commit
-    commit_url = (
-        f"{api_base}/api/v1/repositories/{repository}/branches/{_lakefs_quote_ref(source_branch)}/commits"
-    )
-    commit_data = {
-        "message": f"Kronodroid Iceberg transformation - run {run_id}",
-        "metadata": {
-            "pipeline": "kronodroid-iceberg",
-            "run_id": run_id,
-            "timestamp": datetime.now().isoformat(),
-        },
-    }
+    print(f"  LakeFS Commit & Merge:")
+    print(f"    Source branch: {source_branch}")
+    print(f"    Target branch: {target_branch}")
 
-    commit_resp = requests.post(commit_url, json=commit_data, auth=auth)
-    if commit_resp.status_code in (200, 201):
-        commit_id = commit_resp.json().get("id", "unknown")
-        print(f"  Committed to LakeFS: {commit_id}")
+    # Step 1: Check for uncommitted changes (diff)
+    diff_url = f"{api_base}/api/v1/repositories/{repository}/branches/{_lakefs_quote_ref(source_branch)}/diff"
+    try:
+        diff_resp = requests.get(diff_url, auth=auth, timeout=30)
+    except requests.RequestException as e:
+        print(f"  ERROR: Failed to check diff: {e}")
+        return False
+
+    if diff_resp.status_code != 200:
+        print(f"  ERROR: Failed to get diff: {diff_resp.status_code}")
+        print(f"    Response: {diff_resp.text[:500]}")
+        return False
+
+    diff_data = diff_resp.json()
+    changes = diff_data.get("results", [])
+    has_more = diff_data.get("pagination", {}).get("has_more", False)
+
+    if not changes:
+        print(f"    No uncommitted changes found on branch '{source_branch}'")
+        commit_id = "no-changes"
     else:
-        print(f"  No changes to commit or commit failed: {commit_resp.status_code}")
+        change_count = len(changes)
+        if has_more:
+            print(f"    Found {change_count}+ uncommitted changes")
+        else:
+            print(f"    Found {change_count} uncommitted changes")
 
-    # Merge
+        # Step 2: Commit changes
+        commit_url = (
+            f"{api_base}/api/v1/repositories/{repository}/branches/{_lakefs_quote_ref(source_branch)}/commits"
+        )
+        commit_data = {
+            "message": f"Kronodroid Iceberg transformation - run {run_id}",
+            "metadata": {
+                "pipeline": "kronodroid-iceberg",
+                "run_id": run_id,
+                "timestamp": datetime.now().isoformat(),
+            },
+        }
+
+        try:
+            commit_resp = requests.post(commit_url, json=commit_data, auth=auth, timeout=30)
+        except requests.RequestException as e:
+            print(f"  ERROR: Commit request failed: {e}")
+            return False
+
+        if commit_resp.status_code in (200, 201):
+            commit_id = commit_resp.json().get("id", "unknown")
+            print(f"    Committed: {commit_id}")
+        else:
+            print(f"  ERROR: Commit failed: {commit_resp.status_code}")
+            print(f"    Response: {commit_resp.text[:500]}")
+            return False
+
+    # Step 3: Check and commit any uncommitted changes on target branch
+    # LakeFS requires the target branch to be clean before merging
+    target_diff_url = f"{api_base}/api/v1/repositories/{repository}/branches/{_lakefs_quote_ref(target_branch)}/diff"
+    try:
+        target_diff_resp = requests.get(target_diff_url, auth=auth, timeout=30)
+        if target_diff_resp.status_code == 200:
+            target_changes = target_diff_resp.json().get("results", [])
+            if target_changes:
+                print(f"    Target branch '{target_branch}' has {len(target_changes)} uncommitted changes, committing...")
+                target_commit_url = (
+                    f"{api_base}/api/v1/repositories/{repository}/branches/{_lakefs_quote_ref(target_branch)}/commits"
+                )
+                target_commit_data = {
+                    "message": f"Auto-commit uncommitted changes before merge from {source_branch}",
+                    "metadata": {
+                        "pipeline": "kronodroid-iceberg",
+                        "run_id": run_id,
+                        "auto_commit": "true",
+                    },
+                }
+                target_commit_resp = requests.post(target_commit_url, json=target_commit_data, auth=auth, timeout=30)
+                if target_commit_resp.status_code in (200, 201):
+                    target_commit_id = target_commit_resp.json().get("id", "unknown")
+                    print(f"    Auto-committed target branch: {target_commit_id}")
+                else:
+                    print(f"    Warning: Failed to auto-commit target branch: {target_commit_resp.status_code}")
+    except requests.RequestException as e:
+        print(f"    Warning: Failed to check target branch diff: {e}")
+
+    # Step 4: Merge into target branch
     merge_url = (
         f"{api_base}/api/v1/repositories/{repository}/refs/{_lakefs_quote_ref(source_branch)}/merge/{_lakefs_quote_ref(target_branch)}"
     )
-    merge_data = {"message": f"Merge {source_branch} into {target_branch}"}
+    merge_data = {
+        "message": f"Merge {source_branch} into {target_branch}",
+        "metadata": {
+            "pipeline": "kronodroid-iceberg",
+            "run_id": run_id,
+            "source_commit": commit_id,
+        },
+    }
 
-    merge_resp = requests.post(merge_url, json=merge_data, auth=auth)
+    try:
+        merge_resp = requests.post(merge_url, json=merge_data, auth=auth, timeout=60)
+    except requests.RequestException as e:
+        print(f"  ERROR: Merge request failed: {e}")
+        return False
+
     if merge_resp.status_code in (200, 201):
         merge_ref = merge_resp.json().get("reference", "unknown")
-        print(f"  Merged to {target_branch}: {merge_ref}")
+        print(f"    Merged to {target_branch}: {merge_ref}")
+    elif merge_resp.status_code == 409:
+        # 409 Conflict - could be "no changes to merge" or actual conflict
+        error_text = merge_resp.text.lower()
+        if "no changes" in error_text or "already up to date" in error_text:
+            print(f"    Nothing to merge (branches are identical)")
+        else:
+            print(f"  ERROR: Merge conflict: {merge_resp.status_code}")
+            print(f"    Response: {merge_resp.text[:500]}")
+            return False
+    elif merge_resp.status_code == 400:
+        # 400 Bad Request - check for dirty branch error
+        error_text = merge_resp.text.lower()
+        if "uncommitted" in error_text or "dirty" in error_text:
+            print(f"  ERROR: Target branch has uncommitted changes that could not be auto-committed")
+            print(f"    Please manually commit or reset changes on '{target_branch}' before merging")
+            print(f"    Response: {merge_resp.text[:500]}")
+        else:
+            print(f"  ERROR: Merge failed: {merge_resp.status_code}")
+            print(f"    Response: {merge_resp.text[:500]}")
+        return False
     else:
-        print(f"  Merge skipped or failed: {merge_resp.status_code}")
+        print(f"  ERROR: Merge failed: {merge_resp.status_code}")
+        print(f"    Response: {merge_resp.text[:500]}")
+        return False
 
-    # Delete source branch
+    # Step 5: Delete source branch (cleanup)
     delete_url = f"{api_base}/api/v1/repositories/{repository}/branches/{_lakefs_quote_ref(source_branch)}"
-    requests.delete(delete_url, auth=auth)
-    print(f"  Deleted branch: {source_branch}")
+    try:
+        delete_resp = requests.delete(delete_url, auth=auth, timeout=30)
+        if delete_resp.status_code in (200, 204):
+            print(f"    Deleted branch: {source_branch}")
+        else:
+            print(f"    Warning: Failed to delete branch: {delete_resp.status_code}")
+    except requests.RequestException as e:
+        print(f"    Warning: Failed to delete branch: {e}")
 
     return True
 
@@ -1193,6 +1330,34 @@ def main():
         default=30,
         help="Days of features to materialize (default: 30)",
     )
+    # Spark resource options for testing
+    parser.add_argument(
+        "--driver-memory",
+        default="2g",
+        help="Spark driver memory (default: 2g)",
+    )
+    parser.add_argument(
+        "--executor-memory",
+        default="2g",
+        help="Spark executor memory (default: 2g)",
+    )
+    parser.add_argument(
+        "--executor-instances",
+        type=int,
+        default=2,
+        help="Number of Spark executors (default: 2)",
+    )
+    parser.add_argument(
+        "--test-mode",
+        action="store_true",
+        help="Run in test mode with minimal resources and faster timeout",
+    )
+    parser.add_argument(
+        "--test-limit",
+        type=int,
+        default=0,
+        help="Limit rows per source table for testing (0 = no limit, e.g., 1000 for quick tests)",
+    )
 
     args = parser.parse_args()
 
@@ -1251,14 +1416,34 @@ def main():
                     print("\nPipeline failed at dbt transformation step")
                     sys.exit(1)
             elif transform_engine == "kubeflow":
+                # Apply test mode defaults for faster iteration
+                driver_memory = args.driver_memory
+                executor_memory = args.executor_memory
+                executor_instances = args.executor_instances
+                spark_timeout = args.spark_timeout
+
+                test_limit = args.test_limit
+                if args.test_mode:
+                    print("  Test mode enabled: using minimal resources")
+                    driver_memory = "1g"
+                    executor_memory = "1g"
+                    executor_instances = 1
+                    spark_timeout = min(spark_timeout, 600)  # Max 10 min in test mode
+                    if test_limit == 0:
+                        test_limit = 100  # Default to 100 rows in test mode
+
                 if not run_kubeflow_transformations(
                     destination=args.destination,
                     lakefs_branch=args.branch,
                     spark_image=args.spark_image,
                     namespace=args.k8s_namespace,
-                    timeout_seconds=args.spark_timeout,
+                    timeout_seconds=spark_timeout,
                     use_kfp_client=args.use_kfp_client,
                     kfp_host=args.kfp_host,
+                    driver_memory=driver_memory,
+                    executor_memory=executor_memory,
+                    executor_instances=executor_instances,
+                    test_limit=test_limit,
                 ):
                     success = False
                     print("\nPipeline failed at Kubeflow SparkOperator transformation step")

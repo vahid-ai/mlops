@@ -17,6 +17,8 @@ tasks:
     desc: Create kind cluster and deploy local services
     cmds:
       - task: kind:up
+      - task: spark-operator:install
+      - task: spark-image
 
   down:
     desc: Delete kind cluster
@@ -90,3 +92,76 @@ tasks:
             exit 0
           fi
       - kubectl -n "{{.NAMESPACE}}" logs deployment/"{{.APP}}" -f --tail=200
+
+  spark-image:build:
+    desc: Build the dfp-spark Docker image
+    vars:
+      SPARK_IMAGE: '{{.SPARK_IMAGE | default "dfp-spark:latest"}}'
+    cmds:
+      - docker build -t "{{.SPARK_IMAGE}}" -f tools/docker/Dockerfile.spark .
+
+  spark-image:load:
+    desc: Load dfp-spark image into kind cluster
+    vars:
+      SPARK_IMAGE: '{{.SPARK_IMAGE | default "dfp-spark:latest"}}'
+    cmds:
+      - kind load docker-image "{{.SPARK_IMAGE}}" --name "{{.CLUSTER_NAME}}"
+
+  spark-image:
+    desc: Build and load dfp-spark image into kind
+    cmds:
+      - task: spark-image:build
+      - task: spark-image:load
+
+  spark-operator:install:
+    desc: Install Spark Operator via Helm
+    vars:
+      SPARK_OPERATOR_NAMESPACE: '{{.SPARK_OPERATOR_NAMESPACE | default "spark-operator"}}'
+      SPARK_OPERATOR_VALUES: '{{.SPARK_OPERATOR_VALUES | default "./infra/k8s/spark-operator/values.yaml"}}'
+    cmds:
+      - |
+          if ! command -v helm >/dev/null 2>&1; then
+            echo "helm is required. Install from https://helm.sh/docs/intro/install/" >&2
+            exit 1
+          fi
+      - helm repo add spark-operator https://kubeflow.github.io/spark-operator 2>/dev/null || true
+      - helm repo update spark-operator
+      - |
+          if helm status spark-operator -n "{{.SPARK_OPERATOR_NAMESPACE}}" >/dev/null 2>&1; then
+            echo "Spark Operator already installed, upgrading..."
+            helm upgrade spark-operator spark-operator/spark-operator \
+              --namespace "{{.SPARK_OPERATOR_NAMESPACE}}" \
+              --values "{{.SPARK_OPERATOR_VALUES}}"
+          else
+            echo "Installing Spark Operator..."
+            helm install spark-operator spark-operator/spark-operator \
+              --namespace "{{.SPARK_OPERATOR_NAMESPACE}}" \
+              --create-namespace \
+              --values "{{.SPARK_OPERATOR_VALUES}}"
+          fi
+      - kubectl -n "{{.SPARK_OPERATOR_NAMESPACE}}" rollout status deployment/spark-operator-controller --timeout=120s
+      - echo "Spark Operator installed successfully"
+
+  spark-operator:uninstall:
+    desc: Uninstall Spark Operator
+    vars:
+      SPARK_OPERATOR_NAMESPACE: '{{.SPARK_OPERATOR_NAMESPACE | default "spark-operator"}}'
+    cmds:
+      - helm uninstall spark-operator -n "{{.SPARK_OPERATOR_NAMESPACE}}" || true
+      - kubectl delete namespace "{{.SPARK_OPERATOR_NAMESPACE}}" --ignore-not-found
+
+  spark-operator:status:
+    desc: Show Spark Operator status
+    vars:
+      SPARK_OPERATOR_NAMESPACE: '{{.SPARK_OPERATOR_NAMESPACE | default "spark-operator"}}'
+    cmds:
+      - |
+          if helm status spark-operator -n "{{.SPARK_OPERATOR_NAMESPACE}}" >/dev/null 2>&1; then
+            echo "Spark Operator is installed"
+            kubectl -n "{{.SPARK_OPERATOR_NAMESPACE}}" get pods
+          else
+            echo "Spark Operator is not installed"
+          fi
+      - echo ""
+      - echo "SparkApplications in {{.NAMESPACE}}:"
+      - kubectl -n "{{.NAMESPACE}}" get sparkapplications 2>/dev/null || echo "  (none or CRD not installed)"

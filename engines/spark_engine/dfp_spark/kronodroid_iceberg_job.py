@@ -69,6 +69,12 @@ def get_args() -> argparse.Namespace:
         default="kronodroid",
         help="Database name for mart tables",
     )
+    parser.add_argument(
+        "--test-limit",
+        type=int,
+        default=0,
+        help="Limit rows per source table for testing (0 = no limit)",
+    )
     return parser.parse_args()
 
 
@@ -77,6 +83,7 @@ def read_raw_data(
     minio_bucket: str,
     prefix: str,
     table_name: str,
+    limit: int = 0,
 ) -> DataFrame:
     """Read raw data files from storage (supports JSONL and Parquet).
 
@@ -85,6 +92,7 @@ def read_raw_data(
         minio_bucket: MinIO bucket name
         prefix: Path prefix (e.g., kronodroid_raw)
         table_name: Table name as written by dlt
+        limit: Maximum rows to read (0 = no limit, for testing)
 
     Returns:
         DataFrame with raw data
@@ -96,11 +104,17 @@ def read_raw_data(
 
     print(f"Attempting to read from: {jsonl_path}")
     try:
-        return spark.read.json(jsonl_path)
+        df = spark.read.json(jsonl_path)
     except Exception as e:
         print(f"JSONL read failed: {e}")
         print(f"Falling back to Parquet: {parquet_path}")
-        return spark.read.parquet(parquet_path)
+        df = spark.read.parquet(parquet_path)
+
+    if limit > 0:
+        print(f"  Limiting to {limit} rows for testing")
+        df = df.limit(limit)
+
+    return df
 
 
 def create_stg_emulator(raw_df: DataFrame) -> DataFrame:
@@ -290,6 +304,8 @@ def main() -> int:
     print(f"  Catalog: {args.catalog_name}")
     print(f"  Staging database: {args.staging_database}")
     print(f"  Marts database: {args.marts_database}")
+    if args.test_limit > 0:
+        print(f"  Test limit: {args.test_limit} rows per table")
     print("=" * 60)
 
     # Get or create SparkSession (assumes it's configured externally or via session.py)
@@ -307,13 +323,15 @@ def main() -> int:
         # dlt uses these table names from the Kronodroid Kaggle dataset
         print("\n[1/7] Reading raw emulator data...")
         raw_emulator = read_raw_data(
-            spark, args.minio_bucket, args.minio_prefix, "kronodroid_2021_emu_v1"
+            spark, args.minio_bucket, args.minio_prefix, "kronodroid_2021_emu_v1",
+            limit=args.test_limit,
         )
         print(f"  Rows: {raw_emulator.count()}")
 
         print("\n[2/7] Reading raw real_device data...")
         raw_real_device = read_raw_data(
-            spark, args.minio_bucket, args.minio_prefix, "kronodroid_2021_real_v1"
+            spark, args.minio_bucket, args.minio_prefix, "kronodroid_2021_real_v1",
+            limit=args.test_limit,
         )
         print(f"  Rows: {raw_real_device.count()}")
 
