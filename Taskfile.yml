@@ -14,10 +14,18 @@ tasks:
       - mise install
 
   up:
-    desc: Create kind cluster and deploy local services
+    desc: Create kind cluster and deploy local services (use up:full to include Kubeflow Pipelines)
     cmds:
       - task: kind:up
       - task: spark-operator:install
+      - task: spark-image
+
+  up:full:
+    desc: Create kind cluster with all services including Kubeflow Pipelines
+    cmds:
+      - task: kind:up
+      - task: spark-operator:install
+      - task: kubeflow:install
       - task: spark-image
 
   down:
@@ -165,3 +173,64 @@ tasks:
       - echo ""
       - echo "SparkApplications in {{.NAMESPACE}}:"
       - kubectl -n "{{.NAMESPACE}}" get sparkapplications 2>/dev/null || echo "  (none or CRD not installed)"
+
+  kubeflow:install:
+    desc: Install Kubeflow Pipelines standalone via kustomize
+    vars:
+      KFP_NAMESPACE: '{{.KFP_NAMESPACE | default "kubeflow"}}'
+      KFP_VERSION: '{{.KFP_VERSION | default "2.15.0"}}'
+    cmds:
+      - |
+          if ! command -v kubectl >/dev/null 2>&1; then
+            echo "kubectl is required. Install from https://kubernetes.io/docs/tasks/tools/" >&2
+            exit 1
+          fi
+      - kubectl create namespace "{{.KFP_NAMESPACE}}" --dry-run=client -o yaml | kubectl apply -f -
+      - |
+          echo "Installing Kubeflow Pipelines v{{.KFP_VERSION}}..."
+          kubectl apply -k "github.com/kubeflow/pipelines/manifests/kustomize/cluster-scoped-resources?ref={{.KFP_VERSION}}"
+          kubectl wait --for condition=established --timeout=60s crd/applications.app.k8s.io || true
+          kubectl apply -k "github.com/kubeflow/pipelines/manifests/kustomize/env/platform-agnostic-emissary?ref={{.KFP_VERSION}}"
+      - |
+          echo "Waiting for KFP deployments to be ready..."
+          kubectl -n "{{.KFP_NAMESPACE}}" rollout status deployment/ml-pipeline --timeout=300s || true
+          kubectl -n "{{.KFP_NAMESPACE}}" rollout status deployment/ml-pipeline-ui --timeout=300s || true
+      - echo "Kubeflow Pipelines installed successfully in namespace {{.KFP_NAMESPACE}}"
+      - 'echo "Access the UI via: kubectl port-forward -n {{.KFP_NAMESPACE}} svc/ml-pipeline-ui 8080:80"'
+
+  kubeflow:uninstall:
+    desc: Uninstall Kubeflow Pipelines
+    vars:
+      KFP_NAMESPACE: '{{.KFP_NAMESPACE | default "kubeflow"}}'
+      KFP_VERSION: '{{.KFP_VERSION | default "2.15.0"}}'
+    cmds:
+      - |
+          echo "Uninstalling Kubeflow Pipelines..."
+          kubectl delete -k "github.com/kubeflow/pipelines/manifests/kustomize/env/platform-agnostic-emissary?ref={{.KFP_VERSION}}" --ignore-not-found || true
+          kubectl delete -k "github.com/kubeflow/pipelines/manifests/kustomize/cluster-scoped-resources?ref={{.KFP_VERSION}}" --ignore-not-found || true
+      - kubectl delete namespace "{{.KFP_NAMESPACE}}" --ignore-not-found
+      - echo "Kubeflow Pipelines uninstalled"
+
+  kubeflow:status:
+    desc: Show Kubeflow Pipelines status
+    vars:
+      KFP_NAMESPACE: '{{.KFP_NAMESPACE | default "kubeflow"}}'
+    cmds:
+      - |
+          if kubectl get namespace "{{.KFP_NAMESPACE}}" >/dev/null 2>&1; then
+            echo "Kubeflow Pipelines namespace exists"
+            kubectl -n "{{.KFP_NAMESPACE}}" get pods
+          else
+            echo "Kubeflow Pipelines namespace '{{.KFP_NAMESPACE}}' not found"
+          fi
+      - echo ""
+      - 'echo "KFP API endpoint:"'
+      - kubectl -n "{{.KFP_NAMESPACE}}" get svc ml-pipeline -o jsonpath='{.spec.clusterIP}:{.spec.ports[0].port}' 2>/dev/null && echo "" || echo "  (not available)"
+
+  kubeflow:port-forward:
+    desc: Port-forward Kubeflow Pipelines UI to localhost:8080
+    vars:
+      KFP_NAMESPACE: '{{.KFP_NAMESPACE | default "kubeflow"}}'
+    cmds:
+      - 'echo "Forwarding KFP UI to http://localhost:8080 (press Ctrl+C to stop)"'
+      - 'kubectl port-forward -n "{{.KFP_NAMESPACE}}" svc/ml-pipeline-ui 8080:80'

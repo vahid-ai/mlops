@@ -21,12 +21,12 @@ from feast.types import Float32, Float64, Int64, String
 from .entities import malware_family, malware_sample
 
 # LakeFS Iceberg catalog and table configuration
-# Tables located at: lakefs://kronodroid/dev/iceberg/kronodroid/<table_name>
+# Tables located at: lakefs://kronodroid/main/iceberg/kronodroid/<table_name>
 LAKEFS_CATALOG = os.environ.get("LAKEFS_CATALOG", "lakefs")
 LAKEFS_DATABASE = os.environ.get("LAKEFS_DATABASE", "kronodroid")
 
 # Spark source for training dataset from LakeFS-tracked Iceberg table
-# Path: s3a://kronodroid/dev/iceberg/kronodroid/fct_training_dataset
+# Path: s3a://kronodroid/main/iceberg/kronodroid/fct_training_dataset
 kronodroid_training_source = SparkSource(
     name="kronodroid_training_source",
     table=f"{LAKEFS_CATALOG}.{LAKEFS_DATABASE}.fct_training_dataset",
@@ -35,7 +35,7 @@ kronodroid_training_source = SparkSource(
 )
 
 # Spark source for family statistics from LakeFS-tracked Iceberg table
-# Path: s3a://kronodroid/dev/iceberg/kronodroid/dim_malware_families
+# Path: s3a://kronodroid/main/iceberg/kronodroid/dim_malware_families
 kronodroid_family_source = SparkSource(
     name="kronodroid_family_source",
     table=f"{LAKEFS_CATALOG}.{LAKEFS_DATABASE}.dim_malware_families",
