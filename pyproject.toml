@@ -14,6 +14,8 @@ dependencies = [
     "lakefs-client>=1.1",
     "dagster~=1.4",
     "torch>=2.1",
+    # PyTorch Lightning for model training
+    "lightning>=2.0",
     # dlt and dbt for data ingestion and transformation
     "dlt[filesystem]>=0.4",
     "dbt-core>=1.7",
@@ -30,6 +32,8 @@ dependencies = [
     # Kubeflow / SparkOperator submission (tools/scripts/run_kronodroid_pipeline.py --transform-engine kubeflow)
     "kubernetes>=29.0",
     "pyyaml>=6.0",
+    # Kubeflow Pipelines SDK
+    "kfp>=2.0",
 ]
 
 [dependency-groups]
