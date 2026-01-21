@@ -40,19 +40,21 @@ class TrainAutoencoderOutput(NamedTuple):
 
 
 @dsl.component(
-    base_image="python:3.11-slim",
+    # Use Apache Spark image which includes Java, Spark, and Python
+    # This is required for Iceberg/Spark data loading
+    base_image="apache/spark:3.5.0-python3",
     packages_to_install=[
         "mlflow>=2.0",
         "torch>=2.0",
         "lightning>=2.0",
         "feast[redis]>=0.32",  # Feast for feature retrieval
-        "pyspark>=3.5",
+        "pyspark==3.5.0",  # Match Spark version in base image
         "pandas>=2.0",
         "numpy>=1.24",
         "requests>=2.31",
         "pyarrow>=14.0",
         "psutil>=5.9",  # For resource monitoring
-        "tensorboard>=2.15",  # For TensorBoard logging
+        "tensorboard>=2.10,<2.15",  # For TensorBoard logging (compatible with Python in Spark image)
     ],
 )
 def train_kronodroid_autoencoder_op(
@@ -537,35 +539,143 @@ def train_kronodroid_autoencoder_op(
         return {"lakefs_commit_id": "unknown", "lakefs_repository": repo, "lakefs_ref": ref}
 
     # --- Load data from Iceberg ---
-    def load_data_from_feast(
+    def load_data_from_iceberg_direct(
         repo_path: str,
-        feature_view_name: str,
+        iceberg_table: str,
         feature_columns: List[str],
         max_rows: Optional[int],
     ) -> Tuple[Dict[str, pd.DataFrame], Dict[str, any]]:
-        """Load training data from Feast feature store.
+        """Load training data directly from Iceberg table using Spark config from Feast.
 
-        Uses Feast's offline store (Spark with Iceberg) to retrieve historical features.
-        The Spark configuration including Iceberg JARs is handled by Feast.
+        This is a fallback method when Feast feature views are not registered.
+        It reads the Spark configuration from feature_store.yaml but bypasses
+        the Feast registry entirely.
 
         Args:
-            repo_path: Path to Feast feature_store.yaml
-            feature_view_name: Name of the Feast feature view
+            repo_path: Path to Feast feature_store.yaml (for Spark config)
+            iceberg_table: Full Iceberg table name (e.g., lakefs.kronodroid.fct_training_dataset)
             feature_columns: List of feature columns to retrieve
             max_rows: Optional limit per split
 
         Returns:
             Tuple of (splits dict, lineage info dict)
         """
-        from feast import FeatureStore
+        from pathlib import Path
+        from pyspark.sql import SparkSession
+        import yaml
+        import re
+
+        # Read Feast config for Spark settings
+        feast_config_path = Path(repo_path) / "feature_store.yaml"
+        with open(feast_config_path) as f:
+            feast_config = yaml.safe_load(f)
+
+        spark_conf = feast_config.get("offline_store", {}).get("spark_conf", {})
+        logger.info(f"Creating Spark session with Iceberg JARs from Feast config")
+
+        # Build Spark session
+        builder = SparkSession.builder.appName("kronodroid-training-direct")
+        for key, value in spark_conf.items():
+            # Expand environment variables in config values
+            if isinstance(value, str) and "${" in value:
+                for match in re.finditer(r'\$\{(\w+)\}', value):
+                    env_var = match.group(1)
+                    env_val = os.environ.get(env_var, "")
+                    value = value.replace(f"${{{env_var}}}", env_val)
+            builder = builder.config(key, str(value))
+
+        spark_session = builder.getOrCreate()
+        logger.info(f"Spark session created, reading from: {iceberg_table}")
+
+        # Read from Iceberg table
+        spark_df = spark_session.read.table(iceberg_table)
+        select_cols = ["sample_id", "dataset_split"] + feature_columns
+        available = [c for c in select_cols if c in spark_df.columns]
+        spark_df = spark_df.select(*available)
+
+        df = spark_df.toPandas()
+        logger.info(f"Retrieved {len(df):,} total samples via direct Iceberg read")
+
+        # Split by dataset_split column
+        splits = {}
+        counts = {}
+        for split_name in ["train", "validation", "test"]:
+            split_df = df[df["dataset_split"] == split_name].copy()
+            if max_rows and len(split_df) > max_rows:
+                split_df = split_df.head(max_rows)
+            splits[split_name] = split_df
+            counts[f"{split_name}_samples"] = len(split_df)
+            logger.info(f"  Loaded {split_name}: {len(split_df):,} samples")
+
+        lineage_info = {
+            "iceberg_table": iceberg_table,
+            "data_source": "iceberg_direct",
+            "feast_repo_path": repo_path,
+            **counts,
+        }
+
+        spark_session.stop()
+        return splits, lineage_info
+
+    def load_data_from_feast(
+        repo_path: str,
+        feature_view_name: str,
+        feature_columns: List[str],
+        max_rows: Optional[int],
+        iceberg_table: str = "",
+    ) -> Tuple[Dict[str, pd.DataFrame], Dict[str, any]]:
+        """Load training data from Feast feature store.
+
+        Uses Feast's offline store (Spark with Iceberg) to retrieve historical features.
+        The Spark configuration including Iceberg JARs is handled by Feast.
+        Falls back to direct Iceberg read if Feast registry is unavailable.
+
+        Args:
+            repo_path: Path to Feast feature_store.yaml
+            feature_view_name: Name of the Feast feature view
+            feature_columns: List of feature columns to retrieve
+            max_rows: Optional limit per split
+            iceberg_table: Fallback Iceberg table name if Feast lookup fails
+
+        Returns:
+            Tuple of (splits dict, lineage info dict)
+        """
         from datetime import datetime, timedelta
+        from pathlib import Path
 
-        logger.info(f"Initializing Feast store from: {repo_path}")
-        store = FeatureStore(repo_path=repo_path)
+        # Verify Feast config exists
+        feast_config_path = Path(repo_path) / "feature_store.yaml"
+        if not feast_config_path.exists():
+            raise FileNotFoundError(
+                f"Feast config not found at {feast_config_path}. "
+                "Ensure the 'feast-config' ConfigMap is mounted at /feast"
+            )
 
-        # Get the feature view
-        feature_view = store.get_feature_view(feature_view_name)
-        logger.info(f"Using feature view: {feature_view.name}")
+        # Try Feast first
+        try:
+            from feast import FeatureStore
+
+            logger.info(f"Initializing Feast store from: {repo_path}")
+            store = FeatureStore(repo_path=repo_path)
+
+            # Get the feature view
+            feature_view = store.get_feature_view(feature_view_name)
+            logger.info(f"Using feature view: {feature_view.name}")
+        except Exception as e:
+            # Feast registry not available or feature view not found
+            logger.warning(f"Feast feature view lookup failed: {e}")
+            if iceberg_table:
+                logger.info(f"Falling back to direct Iceberg read from: {iceberg_table}")
+                return load_data_from_iceberg_direct(
+                    repo_path=repo_path,
+                    iceberg_table=iceberg_table,
+                    feature_columns=feature_columns,
+                    max_rows=max_rows,
+                )
+            else:
+                raise RuntimeError(
+                    f"Feast feature view '{feature_view_name}' not found and no fallback Iceberg table provided"
+                )
 
         # Build feature references
         feature_refs = [f"{feature_view_name}:{col}" for col in feature_columns]
@@ -675,6 +785,8 @@ def train_kronodroid_autoencoder_op(
     logger.info(f"LakeFS commit: {lakefs_info.get('lakefs_commit_id', 'unknown')}")
 
     # Load data from Feast (uses Spark with Iceberg JARs internally)
+    # Falls back to direct Iceberg read if Feast registry is unavailable
+    iceberg_table_full = f"{iceberg_catalog}.{iceberg_database}.{source_table}"
     logger.info("Loading data from Feast feature store...")
     data_load_start = time.time()
     splits, data_info = load_data_from_feast(
@@ -682,6 +794,7 @@ def train_kronodroid_autoencoder_op(
         feature_view_name=feast_feature_view,
         feature_columns=feature_names,
         max_rows=max_rows,
+        iceberg_table=iceberg_table_full,
     )
     data_load_time = time.time() - data_load_start
     logger.info(f"Data loading completed in {data_load_time:.1f}s")

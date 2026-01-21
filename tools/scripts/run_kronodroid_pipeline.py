@@ -1486,6 +1486,20 @@ def _run_training_locally(
     logging.getLogger("pyspark").setLevel(logging.WARNING)
     logging.getLogger("py4j").setLevel(logging.WARNING)
 
+    # Resolve Feast repo path for local execution
+    # Default /feast is for Kubeflow containers; resolve to local path if needed
+    resolved_feast_path = feast_repo_path
+    if not Path(feast_repo_path).exists():
+        # Try to find local feast store relative to script or workspace
+        script_dir = Path(__file__).resolve().parent
+        workspace_root = script_dir.parent.parent  # tools/scripts -> workspace root
+        local_feast_path = workspace_root / "feature_stores" / "feast_store"
+        if local_feast_path.exists():
+            resolved_feast_path = str(local_feast_path)
+            logger.info(f"Resolved Feast repo path: {feast_repo_path} -> {resolved_feast_path}")
+        else:
+            logger.warning(f"Feast repo path {feast_repo_path} not found and local fallback not available")
+
     try:
         training_start_time = time.time()
 
@@ -1494,10 +1508,10 @@ def _run_training_locally(
         logger.info(f"Random seed set to {seed}")
 
         # --- Load data from Feast using Spark with Iceberg JARs ---
-        logger.info(f"Loading data from Feast: {feast_repo_path}")
+        logger.info(f"Loading data from Feast: {resolved_feast_path}")
         max_rows = max_rows_per_split if max_rows_per_split > 0 else None
 
-        store = FeatureStore(repo_path=feast_repo_path)
+        store = FeatureStore(repo_path=resolved_feast_path)
         feature_view = store.get_feature_view(feast_feature_view)
         logger.info(f"Using feature view: {feature_view.name}")
 
@@ -1510,7 +1524,7 @@ def _run_training_locally(
         import yaml
 
         # Read Feast config to get spark_conf
-        feast_config_path = Path(feast_repo_path) / "feature_store.yaml"
+        feast_config_path = Path(resolved_feast_path) / "feature_store.yaml"
         with open(feast_config_path) as f:
             feast_config = yaml.safe_load(f)
 

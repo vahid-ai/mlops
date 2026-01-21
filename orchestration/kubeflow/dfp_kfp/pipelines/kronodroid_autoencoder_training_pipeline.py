@@ -224,6 +224,15 @@ def kronodroid_autoencoder_training_pipeline(
         },
     )
 
+    # Mount Feast config as a volume at /feast
+    # The ConfigMap 'feast-config' must exist in the namespace with key 'feature_store.yaml'
+    kubernetes.use_config_map_as_volume(
+        train_task,
+        config_map_name="feast-config",
+        mount_path="/feast",
+        optional=False,
+    )
+
     # Note: MLFLOW_S3_ENDPOINT_URL is set to DEFAULT_MINIO_ENDPOINT internally
     # as pipeline parameters cannot be used with set_env_variable in KFP v2
 
@@ -374,6 +383,14 @@ def kronodroid_full_ml_pipeline(
             "access-key": "AWS_ACCESS_KEY_ID",
             "secret-key": "AWS_SECRET_ACCESS_KEY",
         },
+    )
+
+    # Mount Feast config as a volume at /feast
+    kubernetes.use_config_map_as_volume(
+        train_task,
+        config_map_name="feast-config",
+        mount_path="/feast",
+        optional=False,
     )
 
     train_task.set_memory_request("4Gi")
