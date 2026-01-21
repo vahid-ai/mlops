@@ -51,11 +51,17 @@ spec:
   restartPolicy:
     type: Never
   
+  # Spark UI configuration
+  sparkUIOptions:
+    servicePort: 4040
+    servicePortName: spark-ui
+    serviceType: ClusterIP
+  
   # Driver configuration
   driver:
     cores: 1
-    coreLimit: "1200m"
-    memory: "2g"
+    coreLimit: "1000m"
+    memory: "512m"
     serviceAccount: spark
     labels:
       app.kubernetes.io/name: kronodroid-iceberg
@@ -83,10 +89,10 @@ spec:
   
   # Executor configuration
   executor:
-    cores: 2
-    coreLimit: "2000m"
-    memory: "2g"
-    instances: 2
+    cores: 1
+    coreLimit: "1000m"
+    memory: "512m"
+    instances: 1
     labels:
       app.kubernetes.io/name: kronodroid-iceberg
       app.kubernetes.io/component: executor

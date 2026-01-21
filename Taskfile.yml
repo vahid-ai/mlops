@@ -234,3 +234,116 @@ tasks:
     cmds:
       - 'echo "Forwarding KFP UI to http://localhost:8080 (press Ctrl+C to stop)"'
       - 'kubectl port-forward -n "{{.KFP_NAMESPACE}}" svc/ml-pipeline-ui 8080:80'
+
+  spark-ui:
+    desc: Port-forward Spark UI to localhost:4040 (requires running SparkApplication)
+    vars:
+      SPARK_APP: '{{.SPARK_APP | default ""}}'
+    cmds:
+      - |
+          if [ -z "{{.SPARK_APP}}" ]; then
+            echo "Looking for running SparkApplications in {{.NAMESPACE}}..."
+            kubectl -n "{{.NAMESPACE}}" get sparkapplications -o custom-columns=NAME:.metadata.name,STATE:.status.applicationState.state 2>/dev/null || echo "  (none found)"
+            echo ""
+            echo "Usage: task spark-ui SPARK_APP=<app-name>"
+            echo "Or port-forward directly to the driver pod:"
+            echo "  kubectl -n {{.NAMESPACE}} port-forward <driver-pod> 4040:4040"
+          else
+            SVC_NAME="{{.SPARK_APP}}-ui-svc"
+            echo "Forwarding Spark UI to http://localhost:4040 (press Ctrl+C to stop)"
+            echo "Service: ${SVC_NAME}"
+            kubectl -n "{{.NAMESPACE}}" port-forward "svc/${SVC_NAME}" 4040:4040
+          fi
+
+  spark-app:list:
+    desc: List SparkApplications in the namespace
+    cmds:
+      - kubectl -n "{{.NAMESPACE}}" get sparkapplications -o custom-columns=NAME:.metadata.name,STATE:.status.applicationState.state,AGE:.metadata.creationTimestamp 2>/dev/null || echo "No SparkApplications found"
+
+  spark-app:delete:
+    desc: Delete a SparkApplication (SPARK_APP=<name> or ALL=1 to delete all)
+    vars:
+      SPARK_APP: '{{.SPARK_APP | default ""}}'
+      ALL: '{{.ALL | default ""}}'
+      FORCE: '{{.FORCE | default ""}}'
+    cmds:
+      - |
+          if [ -n "{{.ALL}}" ]; then
+            echo "Deleting all SparkApplications in {{.NAMESPACE}}..."
+            kubectl -n "{{.NAMESPACE}}" delete sparkapplications --all
+            exit 0
+          fi
+          if [ -z "{{.SPARK_APP}}" ]; then
+            echo "SparkApplications in {{.NAMESPACE}}:"
+            kubectl -n "{{.NAMESPACE}}" get sparkapplications -o custom-columns=NAME:.metadata.name,STATE:.status.applicationState.state 2>/dev/null || echo "  (none found)"
+            echo ""
+            echo "Usage:"
+            echo "  task spark-app:delete SPARK_APP=<app-name>        # delete specific app"
+            echo "  task spark-app:delete SPARK_APP=<app-name> FORCE=1  # force delete"
+            echo "  task spark-app:delete ALL=1                       # delete all apps"
+            exit 0
+          fi
+          if [ -n "{{.FORCE}}" ]; then
+            echo "Force deleting SparkApplication {{.SPARK_APP}}..."
+            kubectl -n "{{.NAMESPACE}}" delete sparkapplication "{{.SPARK_APP}}" --force --grace-period=0
+          else
+            echo "Deleting SparkApplication {{.SPARK_APP}}..."
+            kubectl -n "{{.NAMESPACE}}" delete sparkapplication "{{.SPARK_APP}}"
+          fi
+
+  kfp:cleanup:
+    desc: Delete old/stuck Kubeflow pipeline pods and workflows
+    vars:
+      KFP_NAMESPACE: '{{.KFP_NAMESPACE | default "kubeflow"}}'
+      ALL: '{{.ALL | default ""}}'
+    cmds:
+      - |
+          echo "=== Kubeflow Pipeline Pods ==="
+          kubectl -n "{{.KFP_NAMESPACE}}" get pods -l 'workflows.argoproj.io/workflow' 2>/dev/null || echo "(none found)"
+          echo ""
+          
+          if [ -z "{{.ALL}}" ]; then
+            echo "Deleting completed/failed/pending pipeline pods..."
+            kubectl -n "{{.KFP_NAMESPACE}}" delete pods --field-selector=status.phase=Succeeded -l 'workflows.argoproj.io/workflow' 2>/dev/null || true
+            kubectl -n "{{.KFP_NAMESPACE}}" delete pods --field-selector=status.phase=Failed -l 'workflows.argoproj.io/workflow' 2>/dev/null || true
+            kubectl -n "{{.KFP_NAMESPACE}}" delete pods --field-selector=status.phase=Pending -l 'workflows.argoproj.io/workflow' 2>/dev/null || true
+          else
+            echo "Deleting ALL pipeline pods..."
+            kubectl -n "{{.KFP_NAMESPACE}}" delete pods -l 'workflows.argoproj.io/workflow' 2>/dev/null || true
+          fi
+          
+          echo ""
+          echo "Remaining pipeline pods:"
+          kubectl -n "{{.KFP_NAMESPACE}}" get pods -l 'workflows.argoproj.io/workflow' 2>/dev/null || echo "(none)"
+
+  kfp:workflows:list:
+    desc: List Kubeflow pipeline workflows (Argo Workflows)
+    vars:
+      KFP_NAMESPACE: '{{.KFP_NAMESPACE | default "kubeflow"}}'
+    cmds:
+      - kubectl -n "{{.KFP_NAMESPACE}}" get workflows -o custom-columns='NAME:.metadata.name,STATUS:.status.phase,AGE:.metadata.creationTimestamp' 2>/dev/null || echo "No workflows found"
+
+  kfp:workflows:delete:
+    desc: Delete Kubeflow pipeline workflows (WORKFLOW=<name> or ALL=1)
+    vars:
+      KFP_NAMESPACE: '{{.KFP_NAMESPACE | default "kubeflow"}}'
+      WORKFLOW: '{{.WORKFLOW | default ""}}'
+      ALL: '{{.ALL | default ""}}'
+    cmds:
+      - |
+          if [ -n "{{.ALL}}" ]; then
+            echo "Deleting ALL workflows in {{.KFP_NAMESPACE}}..."
+            kubectl -n "{{.KFP_NAMESPACE}}" delete workflows --all
+            exit 0
+          fi
+          if [ -z "{{.WORKFLOW}}" ]; then
+            echo "Workflows in {{.KFP_NAMESPACE}}:"
+            kubectl -n "{{.KFP_NAMESPACE}}" get workflows -o custom-columns='NAME:.metadata.name,STATUS:.status.phase,AGE:.metadata.creationTimestamp' 2>/dev/null || echo "(none)"
+            echo ""
+            echo "Usage:"
+            echo "  task kfp:workflows:delete WORKFLOW=<name>  # delete specific workflow"
+            echo "  task kfp:workflows:delete ALL=1            # delete all workflows"
+          else
+            echo "Deleting workflow {{.WORKFLOW}}..."
+            kubectl -n "{{.KFP_NAMESPACE}}" delete workflow "{{.WORKFLOW}}"
+          fi

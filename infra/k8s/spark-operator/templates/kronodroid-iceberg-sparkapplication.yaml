@@ -60,11 +60,17 @@ spec:
   restartPolicy:
     type: Never
   
+  # Spark UI configuration
+  sparkUIOptions:
+    servicePort: 4040
+    servicePortName: spark-ui
+    serviceType: ClusterIP
+  
   # Driver configuration
   driver:
     cores: 1
-    coreLimit: "1200m"
-    memory: "2g"
+    coreLimit: "1000m"
+    memory: "512m"
     labels:
       version: "3.5.0"
       app.kubernetes.io/component: driver
@@ -93,9 +99,9 @@ spec:
   
   # Executor configuration
   executor:
-    cores: 2
-    instances: 2
-    memory: "2g"
+    cores: 1
+    instances: 1
+    memory: "512m"
     labels:
       version: "3.5.0"
       app.kubernetes.io/component: executor

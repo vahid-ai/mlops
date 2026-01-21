@@ -185,13 +185,16 @@ def train_and_register(
     L.seed_everything(seed)
 
     # Setup MLflow
+    print(f"Setting MLflow tracking URI: {mlflow_tracking_uri} with experiment {mlflow_experiment_name}")
     mlflow.set_tracking_uri(mlflow_tracking_uri)
     mlflow.set_experiment(mlflow_experiment_name)
 
     # Get LakeFS lineage info
+    print(f"Getting LakeFS lineage info for {lakefs_repository}@{lakefs_ref}")
     lakefs_info = get_lakefs_commit_info(lakefs_endpoint, lakefs_repository, lakefs_ref)
 
     # Get Spark session and load data
+    print(f"Getting Spark session for {iceberg_catalog}")
     spark = get_spark_session(catalog=iceberg_catalog, lakefs_endpoint=lakefs_endpoint)
 
     splits, data_lineage = load_splits_from_iceberg(
@@ -204,6 +207,7 @@ def train_and_register(
     )
 
     # Create DataLoaders
+    print(f"Creating DataLoaders for {feature_names}")
     train_loader, val_loader, test_loader, norm_params = create_dataloaders_from_dataframes(
         train_df=splits["train"],
         val_df=splits["validation"],
@@ -215,6 +219,7 @@ def train_and_register(
     )
 
     # Create model
+    print(f"Creating model with input dimension {len(feature_names)}")
     input_dim = len(feature_names)
     model = LightningAutoencoder(
         input_dim=input_dim,
@@ -224,6 +229,7 @@ def train_and_register(
     )
 
     # Start MLflow run
+    print(f"Starting MLflow run")
     with mlflow.start_run() as run:
         run_id = run.info.run_id
 

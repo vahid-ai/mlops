@@ -61,6 +61,7 @@ DEFAULT_SOURCE_TABLE = "fct_training_dataset"
 
 DEFAULT_FEAST_PROJECT = "dfp"
 DEFAULT_FEAST_FEATURE_VIEW = "malware_sample_features"
+DEFAULT_FEAST_REPO_PATH = "/feast"  # Path to Feast feature_store.yaml in container
 
 # Default feature names (22 features)
 DEFAULT_FEATURE_NAMES: List[str] = [
@@ -99,7 +100,8 @@ def kronodroid_autoencoder_training_pipeline(
     iceberg_catalog: str = DEFAULT_ICEBERG_CATALOG,
     iceberg_database: str = DEFAULT_ICEBERG_DATABASE,
     source_table: str = DEFAULT_SOURCE_TABLE,
-    # Feast/Feature configuration (for lineage)
+    # Feast/Feature configuration (for data loading and lineage)
+    feast_repo_path: str = DEFAULT_FEAST_REPO_PATH,
     feast_project: str = DEFAULT_FEAST_PROJECT,
     feast_feature_view: str = DEFAULT_FEAST_FEATURE_VIEW,
     feature_names_json: str = json.dumps(DEFAULT_FEATURE_NAMES),
@@ -112,6 +114,12 @@ def kronodroid_autoencoder_training_pipeline(
     learning_rate: float = DEFAULT_LEARNING_RATE,
     seed: int = DEFAULT_SEED,
     max_rows_per_split: int = 0,  # 0 = unlimited
+    # Logging and monitoring configuration
+    log_level: str = "INFO",  # DEBUG, INFO, WARNING, ERROR
+    enable_tensorboard: bool = True,
+    log_every_n_steps: int = 10,
+    enable_gradient_logging: bool = True,
+    enable_resource_monitoring: bool = True,
 ):
     """Run the Kronodroid autoencoder training pipeline.
 
@@ -142,8 +150,9 @@ def kronodroid_autoencoder_training_pipeline(
         iceberg_catalog: Iceberg catalog name
         iceberg_database: Iceberg database name
         source_table: Source Iceberg table with dataset_split column
+        feast_repo_path: Path to Feast feature_store.yaml in container
         feast_project: Feast project name (for lineage tracking)
-        feast_feature_view: Feast feature view name (for lineage tracking)
+        feast_feature_view: Feast feature view name (data loading and lineage)
         feature_names_json: JSON-encoded list of feature column names
         latent_dim: Autoencoder latent space dimension
         hidden_dims_json: JSON-encoded list of hidden layer dimensions
@@ -152,6 +161,11 @@ def kronodroid_autoencoder_training_pipeline(
         learning_rate: Optimizer learning rate
         seed: Random seed for reproducibility
         max_rows_per_split: Row limit per split (0 for unlimited, useful for testing)
+        log_level: Python logging level (DEBUG, INFO, WARNING, ERROR)
+        enable_tensorboard: Enable TensorBoard logging alongside MLflow
+        log_every_n_steps: Log per-step metrics every N training steps
+        enable_gradient_logging: Log gradient statistics during training
+        enable_resource_monitoring: Log memory and GPU usage metrics
     """
     # Training component
     train_task = train_kronodroid_autoencoder_op(
@@ -166,7 +180,8 @@ def kronodroid_autoencoder_training_pipeline(
         iceberg_catalog=iceberg_catalog,
         iceberg_database=iceberg_database,
         source_table=source_table,
-        # Feature config
+        # Feast config (data loading and lineage)
+        feast_repo_path=feast_repo_path,
         feast_project=feast_project,
         feast_feature_view=feast_feature_view,
         feature_names_json=feature_names_json,
@@ -181,6 +196,12 @@ def kronodroid_autoencoder_training_pipeline(
         max_rows_per_split=max_rows_per_split,
         # MLflow artifact storage
         minio_endpoint=minio_endpoint,
+        # Logging and monitoring
+        log_level=log_level,
+        enable_tensorboard=enable_tensorboard,
+        log_every_n_steps=log_every_n_steps,
+        enable_gradient_logging=enable_gradient_logging,
+        enable_resource_monitoring=enable_resource_monitoring,
     )
 
     # Inject LakeFS credentials from K8s secret
@@ -240,7 +261,8 @@ def kronodroid_full_ml_pipeline(
     iceberg_catalog: str = DEFAULT_ICEBERG_CATALOG,
     iceberg_database: str = DEFAULT_ICEBERG_DATABASE,
     source_table: str = DEFAULT_SOURCE_TABLE,
-    # Feature configuration
+    # Feast/Feature configuration
+    feast_repo_path: str = DEFAULT_FEAST_REPO_PATH,
     feast_project: str = DEFAULT_FEAST_PROJECT,
     feast_feature_view: str = DEFAULT_FEAST_FEATURE_VIEW,
     feature_names_json: str = json.dumps(DEFAULT_FEATURE_NAMES),
@@ -253,6 +275,12 @@ def kronodroid_full_ml_pipeline(
     learning_rate: float = DEFAULT_LEARNING_RATE,
     seed: int = DEFAULT_SEED,
     max_rows_per_split: int = 0,
+    # Logging and monitoring configuration
+    log_level: str = "INFO",
+    enable_tensorboard: bool = True,
+    log_every_n_steps: int = 10,
+    enable_gradient_logging: bool = True,
+    enable_resource_monitoring: bool = True,
 ):
     """Full Kronodroid ML pipeline: transform (optional) -> train -> register.
 
@@ -278,8 +306,9 @@ def kronodroid_full_ml_pipeline(
         iceberg_catalog: Iceberg catalog name
         iceberg_database: Iceberg database name
         source_table: Source Iceberg table
+        feast_repo_path: Path to Feast feature_store.yaml in container
         feast_project: Feast project name
-        feast_feature_view: Feast feature view name
+        feast_feature_view: Feast feature view name (data loading and lineage)
         feature_names_json: JSON-encoded list of feature names
         latent_dim: Autoencoder latent dimension
         hidden_dims_json: JSON-encoded hidden layer dimensions
@@ -309,6 +338,7 @@ def kronodroid_full_ml_pipeline(
         iceberg_catalog=iceberg_catalog,
         iceberg_database=iceberg_database,
         source_table=source_table,
+        feast_repo_path=feast_repo_path,
         feast_project=feast_project,
         feast_feature_view=feast_feature_view,
         feature_names_json=feature_names_json,
@@ -320,6 +350,12 @@ def kronodroid_full_ml_pipeline(
         seed=seed,
         max_rows_per_split=max_rows_per_split,
         minio_endpoint=minio_endpoint,
+        # Logging and monitoring
+        log_level=log_level,
+        enable_tensorboard=enable_tensorboard,
+        log_every_n_steps=log_every_n_steps,
+        enable_gradient_logging=enable_gradient_logging,
+        enable_resource_monitoring=enable_resource_monitoring,
     )
 
     # Configure credentials

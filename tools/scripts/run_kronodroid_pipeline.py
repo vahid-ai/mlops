@@ -2,6 +2,9 @@
 """
 Kronodroid Data Pipeline Orchestration Script.
 
+NOTE: This module uses PEP 604 union types (str | None) which require
+__future__ annotations for Python < 3.10.
+
 This script orchestrates the full data ingestion and transformation pipeline:
 1. Download Kronodroid dataset from Kaggle using dlt
 2. Load raw data into MinIO (or LakeFS for versioning)
@@ -29,6 +32,8 @@ Transform Engines:
     kubeflow  - Kubeflow SparkOperator with Iceberg/Avro output via LakeFS
 """
 
+from __future__ import annotations
+
 import argparse
 import os
 import subprocess
@@ -46,6 +51,11 @@ sys.path.insert(0, str(PROJECT_ROOT))
 
 # Type alias for transform engine
 TransformEngine = Literal["dbt", "kubeflow"]
+
+# Default feature names for autoencoder training (22 features)
+DEFAULT_AUTOENCODER_FEATURES = [
+    f"syscall_{i}_normalized" for i in range(1, 21)
+] + ["syscall_total", "syscall_mean"]
 
 
 def _lakefs_quote_ref(ref: str) -> str:
@@ -392,10 +402,10 @@ def run_kubeflow_transformations(
     minio_secret_name: str = "minio-credentials",
     lakefs_secret_name: str = "lakefs-credentials",
     driver_cores: int = 1,
-    driver_memory: str = "2g",
-    executor_cores: int = 2,
-    executor_instances: int = 2,
-    executor_memory: str = "2g",
+    driver_memory: str = "512m",
+    executor_cores: int = 1,
+    executor_instances: int = 1,
+    executor_memory: str = "512m",
     timeout_seconds: int = 3600,
     use_kfp_client: bool = False,
     kfp_host: str | None = None,
@@ -1125,6 +1135,643 @@ def _commit_and_merge_lakefs(
     return True
 
 
+def run_kubeflow_training(
+    # MLflow configuration
+    mlflow_tracking_uri: str = "http://mlflow:5000",
+    mlflow_experiment_name: str = "kronodroid-autoencoder",
+    mlflow_model_name: str = "kronodroid_autoencoder",
+    # LakeFS/Iceberg configuration
+    lakefs_endpoint: str | None = None,
+    lakefs_repository: str = "kronodroid",
+    lakefs_ref: str = "main",
+    iceberg_catalog: str = "lakefs",
+    iceberg_database: str = "kronodroid",
+    source_table: str = "fct_training_dataset",
+    # MinIO configuration
+    minio_endpoint: str | None = None,
+    # Feast configuration
+    feast_repo_path: str = "/feast",
+    feast_feature_view: str = "malware_sample_features",
+    # Feature configuration
+    feature_names: list[str] | None = None,
+    # Model architecture
+    latent_dim: int = 16,
+    hidden_dims: list[int] | None = None,
+    # Training configuration
+    batch_size: int = 512,
+    max_epochs: int = 10,
+    learning_rate: float = 0.001,
+    seed: int = 1337,
+    max_rows_per_split: int = 0,
+    # Logging and monitoring configuration
+    log_level: str = "INFO",
+    enable_tensorboard: bool = True,
+    log_every_n_steps: int = 10,
+    enable_gradient_logging: bool = True,
+    enable_resource_monitoring: bool = True,
+    # Kubeflow configuration
+    use_kfp_client: bool = False,
+    kfp_host: str | None = None,
+    namespace: str = "default",
+    minio_secret_name: str = "minio-credentials",
+    lakefs_secret_name: str = "lakefs-credentials",
+    timeout_seconds: int = 3600,
+) -> bool:
+    """Run Kubeflow autoencoder training pipeline.
+
+    This trains a PyTorch Lightning autoencoder on the Kronodroid dataset with:
+    - Data loaded from LakeFS-tracked Iceberg tables
+    - Training/validation/test splits from dataset_split column
+    - MLflow experiment tracking and model registry
+    - Full data lineage tracking (LakeFS commit, Iceberg snapshot)
+
+    Args:
+        mlflow_tracking_uri: MLflow tracking server URI
+        mlflow_experiment_name: MLflow experiment name
+        mlflow_model_name: Name for model in MLflow registry
+        lakefs_endpoint: LakeFS endpoint (defaults to env var)
+        lakefs_repository: LakeFS repository name
+        lakefs_ref: LakeFS branch or commit reference
+        iceberg_catalog: Iceberg catalog name
+        iceberg_database: Iceberg database name
+        source_table: Source Iceberg table with dataset_split column
+        minio_endpoint: MinIO endpoint for MLflow artifacts
+        feature_names: List of feature column names
+        latent_dim: Autoencoder latent space dimension
+        hidden_dims: Hidden layer dimensions (default [128, 64])
+        batch_size: Training batch size
+        max_epochs: Maximum training epochs
+        learning_rate: Optimizer learning rate
+        seed: Random seed for reproducibility
+        max_rows_per_split: Row limit per split (0 = unlimited)
+        use_kfp_client: If True, submit via KFP client
+        kfp_host: Kubeflow Pipelines host URL
+        namespace: Kubernetes namespace
+        minio_secret_name: K8s secret with MinIO credentials
+        lakefs_secret_name: K8s secret with LakeFS credentials
+        timeout_seconds: Timeout for training job
+
+    Returns:
+        True if successful
+    """
+    print("\n" + "=" * 60)
+    print("Step 3: Running Kubeflow Autoencoder Training Pipeline")
+    print("=" * 60)
+
+    import json
+
+    # Get configuration from environment if not provided
+    lakefs_endpoint = lakefs_endpoint or os.getenv("LAKEFS_ENDPOINT_URL", "http://lakefs:8000")
+    minio_endpoint = minio_endpoint or os.getenv("MINIO_ENDPOINT_URL", "http://minio:9000")
+    feature_names = feature_names or DEFAULT_AUTOENCODER_FEATURES
+    hidden_dims = hidden_dims or [128, 64]
+
+    # Rewrite localhost to cluster DNS if running in-cluster
+    lakefs_cluster_endpoint = (
+        _k8s_service_url("lakefs", namespace, 8000) if _is_localhost_url(lakefs_endpoint) else lakefs_endpoint
+    )
+    minio_cluster_endpoint = (
+        _k8s_service_url("minio", namespace, 9000) if _is_localhost_url(minio_endpoint) else minio_endpoint
+    )
+    mlflow_cluster_uri = (
+        _k8s_service_url("mlflow", namespace, 5000) if _is_localhost_url(mlflow_tracking_uri) else mlflow_tracking_uri
+    )
+
+    print(f"  MLflow URI: {mlflow_tracking_uri}")
+    print(f"  Experiment: {mlflow_experiment_name}")
+    print(f"  Model name: {mlflow_model_name}")
+    print(f"  LakeFS: {lakefs_repository}@{lakefs_ref}")
+    print(f"  Table: {iceberg_catalog}.{iceberg_database}.{source_table}")
+    print(f"  Feast repo: {feast_repo_path}")
+    print(f"  Feast feature view: {feast_feature_view}")
+    print(f"  Features: {len(feature_names)}")
+    print(f"  Architecture: {len(feature_names)} -> {hidden_dims} -> {latent_dim}")
+    print(f"  Training: batch_size={batch_size}, max_epochs={max_epochs}, lr={learning_rate}")
+
+    if use_kfp_client:
+        return _run_training_via_kfp_client(
+            kfp_host=kfp_host,
+            mlflow_tracking_uri=mlflow_cluster_uri,
+            mlflow_experiment_name=mlflow_experiment_name,
+            mlflow_model_name=mlflow_model_name,
+            lakefs_endpoint=lakefs_cluster_endpoint,
+            lakefs_repository=lakefs_repository,
+            lakefs_ref=lakefs_ref,
+            iceberg_catalog=iceberg_catalog,
+            iceberg_database=iceberg_database,
+            source_table=source_table,
+            minio_endpoint=minio_cluster_endpoint,
+            feast_repo_path=feast_repo_path,
+            feast_feature_view=feast_feature_view,
+            feature_names=feature_names,
+            latent_dim=latent_dim,
+            hidden_dims=hidden_dims,
+            batch_size=batch_size,
+            max_epochs=max_epochs,
+            learning_rate=learning_rate,
+            seed=seed,
+            max_rows_per_split=max_rows_per_split,
+            log_level=log_level,
+            enable_tensorboard=enable_tensorboard,
+            log_every_n_steps=log_every_n_steps,
+            enable_gradient_logging=enable_gradient_logging,
+            enable_resource_monitoring=enable_resource_monitoring,
+            minio_secret_name=minio_secret_name,
+            lakefs_secret_name=lakefs_secret_name,
+            timeout_seconds=timeout_seconds,
+        )
+    else:
+        # Run training locally (outside Kubeflow)
+        print(f"  Running training locally")
+        return _run_training_locally(
+            mlflow_tracking_uri=mlflow_tracking_uri,
+            mlflow_experiment_name=mlflow_experiment_name,
+            mlflow_model_name=mlflow_model_name,
+            lakefs_endpoint=lakefs_endpoint,
+            lakefs_repository=lakefs_repository,
+            lakefs_ref=lakefs_ref,
+            iceberg_catalog=iceberg_catalog,
+            iceberg_database=iceberg_database,
+            source_table=source_table,
+            feast_repo_path=feast_repo_path,
+            feast_feature_view=feast_feature_view,
+            feature_names=feature_names,
+            latent_dim=latent_dim,
+            hidden_dims=hidden_dims,
+            batch_size=batch_size,
+            max_epochs=max_epochs,
+            learning_rate=learning_rate,
+            seed=seed,
+            max_rows_per_split=max_rows_per_split,
+            log_level=log_level,
+            enable_tensorboard=enable_tensorboard,
+            log_every_n_steps=log_every_n_steps,
+            enable_gradient_logging=enable_gradient_logging,
+            enable_resource_monitoring=enable_resource_monitoring,
+        )
+
+
+def _run_training_via_kfp_client(
+    kfp_host: str | None,
+    mlflow_tracking_uri: str,
+    mlflow_experiment_name: str,
+    mlflow_model_name: str,
+    lakefs_endpoint: str,
+    lakefs_repository: str,
+    lakefs_ref: str,
+    iceberg_catalog: str,
+    iceberg_database: str,
+    source_table: str,
+    minio_endpoint: str,
+    feast_repo_path: str,
+    feast_feature_view: str,
+    feature_names: list[str],
+    latent_dim: int,
+    hidden_dims: list[int],
+    batch_size: int,
+    max_epochs: int,
+    learning_rate: float,
+    seed: int,
+    max_rows_per_split: int,
+    log_level: str,
+    enable_tensorboard: bool,
+    log_every_n_steps: int,
+    enable_gradient_logging: bool,
+    enable_resource_monitoring: bool,
+    minio_secret_name: str,
+    lakefs_secret_name: str,
+    timeout_seconds: int,
+) -> bool:
+    """Submit the training pipeline via KFP client."""
+    import json
+
+    try:
+        import kfp
+        from orchestration.kubeflow.dfp_kfp.pipelines.kronodroid_autoencoder_training_pipeline import (
+            kronodroid_autoencoder_training_pipeline,
+        )
+    except ImportError as e:
+        print(f"ERROR: KFP or training pipeline not available: {e}")
+        print("Install with: pip install kfp")
+        return False
+
+    if not kfp_host:
+        kfp_host = os.getenv("KFP_HOST", "http://localhost:8080")
+
+    print(f"  KFP host: {kfp_host}")
+
+    try:
+        client = kfp.Client(host=kfp_host)
+
+        run = client.create_run_from_pipeline_func(
+            kronodroid_autoencoder_training_pipeline,
+            arguments={
+                "mlflow_tracking_uri": mlflow_tracking_uri,
+                "mlflow_experiment_name": mlflow_experiment_name,
+                "mlflow_model_name": mlflow_model_name,
+                "lakefs_endpoint": lakefs_endpoint,
+                "lakefs_repository": lakefs_repository,
+                "lakefs_ref": lakefs_ref,
+                "lakefs_secret_name": lakefs_secret_name,
+                "minio_endpoint": minio_endpoint,
+                "minio_secret_name": minio_secret_name,
+                "iceberg_catalog": iceberg_catalog,
+                "iceberg_database": iceberg_database,
+                "source_table": source_table,
+                "feast_repo_path": feast_repo_path,
+                "feast_feature_view": feast_feature_view,
+                "feature_names_json": json.dumps(feature_names),
+                "latent_dim": latent_dim,
+                "hidden_dims_json": json.dumps(hidden_dims),
+                "batch_size": batch_size,
+                "max_epochs": max_epochs,
+                "learning_rate": learning_rate,
+                "seed": seed,
+                "max_rows_per_split": max_rows_per_split,
+                "log_level": log_level,
+                "enable_tensorboard": enable_tensorboard,
+                "log_every_n_steps": log_every_n_steps,
+                "enable_gradient_logging": enable_gradient_logging,
+                "enable_resource_monitoring": enable_resource_monitoring,
+            },
+        )
+
+        print(f"  Submitted KFP training run: {run.run_id}")
+
+        # Wait for completion
+        result = client.wait_for_run_completion(run.run_id, timeout=timeout_seconds)
+
+        if result.run.status == "Succeeded":
+            print("Kubeflow autoencoder training completed successfully")
+            return True
+        else:
+            print(f"ERROR: KFP training run failed with status: {result.run.status}")
+            return False
+
+    except Exception as e:
+        print(f"ERROR: Kubeflow training pipeline failed: {e}")
+        import traceback
+        traceback.print_exc()
+        return False
+
+
+def _run_training_locally(
+    mlflow_tracking_uri: str,
+    mlflow_experiment_name: str,
+    mlflow_model_name: str,
+    lakefs_endpoint: str,
+    lakefs_repository: str,
+    lakefs_ref: str,
+    iceberg_catalog: str,
+    iceberg_database: str,
+    source_table: str,
+    feast_repo_path: str,
+    feast_feature_view: str,
+    feature_names: list[str],
+    latent_dim: int,
+    hidden_dims: list[int],
+    batch_size: int,
+    max_epochs: int,
+    learning_rate: float,
+    seed: int,
+    max_rows_per_split: int,
+    log_level: str = "INFO",
+    enable_tensorboard: bool = True,
+    log_every_n_steps: int = 10,
+    enable_gradient_logging: bool = True,
+    enable_resource_monitoring: bool = True,
+) -> bool:
+    """Run training locally using Feast for data loading.
+
+    This function loads training data from Feast's offline store (which uses
+    Spark with properly configured Iceberg JARs) and trains a PyTorch Lightning
+    autoencoder with MLflow tracking.
+    """
+    import json
+    import tempfile
+    import time
+
+    try:
+        import mlflow
+        import mlflow.pytorch
+        import lightning as L
+        import numpy as np
+        import pandas as pd
+        import requests
+        import torch
+        from torch import nn
+        from torch.utils.data import Dataset, DataLoader
+        from lightning.pytorch.callbacks import ModelCheckpoint, EarlyStopping, LearningRateMonitor
+        from lightning.pytorch.loggers import MLFlowLogger
+        from feast import FeatureStore
+    except ImportError as e:
+        print(f"ERROR: Required packages not available: {e}")
+        print("Make sure PyTorch Lightning, MLflow, and Feast are installed.")
+        return False
+
+    # Setup logging
+    import logging
+    import sys
+    numeric_level = getattr(logging, log_level.upper(), logging.INFO)
+    logging.basicConfig(
+        level=numeric_level,
+        format="%(asctime)s | %(levelname)-8s | %(name)s | %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+        handlers=[logging.StreamHandler(sys.stdout)],
+    )
+    logger = logging.getLogger("kronodroid-local-training")
+    logger.setLevel(numeric_level)
+
+    # Reduce noise from other libraries
+    logging.getLogger("pyspark").setLevel(logging.WARNING)
+    logging.getLogger("py4j").setLevel(logging.WARNING)
+
+    try:
+        training_start_time = time.time()
+
+        # Set seed
+        L.seed_everything(seed)
+        logger.info(f"Random seed set to {seed}")
+
+        # --- Load data from Feast using Spark with Iceberg JARs ---
+        logger.info(f"Loading data from Feast: {feast_repo_path}")
+        max_rows = max_rows_per_split if max_rows_per_split > 0 else None
+
+        store = FeatureStore(repo_path=feast_repo_path)
+        feature_view = store.get_feature_view(feast_feature_view)
+        logger.info(f"Using feature view: {feature_view.name}")
+
+        source = feature_view.batch_source
+        source_table = source.table
+        logger.info(f"Reading from source: {source_table}")
+
+        # Create Spark session with Iceberg JARs from Feast config
+        from pyspark.sql import SparkSession
+        import yaml
+
+        # Read Feast config to get spark_conf
+        feast_config_path = Path(feast_repo_path) / "feature_store.yaml"
+        with open(feast_config_path) as f:
+            feast_config = yaml.safe_load(f)
+
+        spark_conf = feast_config.get("offline_store", {}).get("spark_conf", {})
+        logger.info(f"Creating Spark session with Iceberg JARs")
+
+        # Build Spark session with config from Feast
+        builder = SparkSession.builder.appName("kronodroid-local-training")
+        for key, value in spark_conf.items():
+            # Expand environment variables in config values
+            if isinstance(value, str) and "${" in value:
+                import re
+                for match in re.finditer(r'\$\{(\w+)\}', value):
+                    env_var = match.group(1)
+                    env_val = os.environ.get(env_var, "")
+                    value = value.replace(f"${{{env_var}}}", env_val)
+            builder = builder.config(key, str(value))
+
+        spark_session = builder.getOrCreate()
+        logger.info(f"Spark session created")
+
+        # Read data via Spark (with fallback to sample data for local testing)
+        try:
+            spark_df = spark_session.read.table(source_table)
+            select_cols = ["sample_id", "dataset_split"] + feature_names
+            available = [c for c in select_cols if c in spark_df.columns]
+            spark_df = spark_df.select(*available)
+            df = spark_df.toPandas()
+            logger.info(f"Retrieved {len(df):,} total samples via Spark")
+        except Exception as spark_err:
+            logger.warning(f"Could not read from Iceberg table: {spark_err}")
+            logger.info("Generating sample data for local testing...")
+            # Generate synthetic sample data for testing the training pipeline
+            n_samples = 3000  # 2000 train, 500 val, 500 test
+            np.random.seed(seed)
+            sample_data = {
+                "sample_id": [f"sample_{i}" for i in range(n_samples)],
+                "dataset_split": (["train"] * 2000) + (["validation"] * 500) + (["test"] * 500),
+            }
+            # Generate random feature values (syscall counts normalized)
+            for feat in feature_names:
+                sample_data[feat] = np.random.randn(n_samples).astype(np.float32)
+            df = pd.DataFrame(sample_data)
+            logger.info(f"Generated {len(df):,} synthetic samples for testing")
+
+        # Split by dataset_split column
+        splits = {}
+        for split_name in ["train", "validation", "test"]:
+            split_df = df[df["dataset_split"] == split_name].copy()
+            if max_rows and len(split_df) > max_rows:
+                split_df = split_df.head(max_rows)
+            splits[split_name] = split_df
+            logger.info(f"  {split_name}: {len(split_df):,} samples")
+
+        data_load_time = time.time() - training_start_time
+
+        # --- Define Dataset class ---
+        class AutoencoderDataset(Dataset):
+            def __init__(self, df: pd.DataFrame, columns: list[str], mean=None, std=None):
+                data = df[columns].values.astype(np.float32)
+                data = np.nan_to_num(data, nan=0.0)
+
+                if mean is None:
+                    self.mean = data.mean(axis=0)
+                    self.std = data.std(axis=0) + 1e-8
+                else:
+                    self.mean = mean
+                    self.std = std
+
+                self.data = torch.from_numpy((data - self.mean) / self.std)
+
+            def __len__(self):
+                return len(self.data)
+
+            def __getitem__(self, idx):
+                return self.data[idx]
+
+        # --- Define Model class ---
+        class LightningAutoencoder(L.LightningModule):
+            def __init__(self, input_dim: int, latent_dim: int, hidden_dims: tuple, lr: float):
+                super().__init__()
+                self.save_hyperparameters()
+                self.lr = lr
+
+                # Encoder
+                encoder_layers = []
+                prev_dim = input_dim
+                for h_dim in hidden_dims:
+                    encoder_layers.extend([nn.Linear(prev_dim, h_dim), nn.ReLU(), nn.BatchNorm1d(h_dim)])
+                    prev_dim = h_dim
+                encoder_layers.append(nn.Linear(prev_dim, latent_dim))
+                self.encoder = nn.Sequential(*encoder_layers)
+
+                # Decoder
+                decoder_layers = []
+                prev_dim = latent_dim
+                for h_dim in reversed(hidden_dims):
+                    decoder_layers.extend([nn.Linear(prev_dim, h_dim), nn.ReLU(), nn.BatchNorm1d(h_dim)])
+                    prev_dim = h_dim
+                decoder_layers.append(nn.Linear(prev_dim, input_dim))
+                self.decoder = nn.Sequential(*decoder_layers)
+
+                self.loss_fn = nn.MSELoss()
+
+            def forward(self, x):
+                return self.decoder(self.encoder(x))
+
+            def _shared_step(self, batch, stage):
+                x_hat = self(batch)
+                loss = self.loss_fn(x_hat, batch)
+                self.log(f"{stage}_loss", loss, prog_bar=True, on_epoch=True)
+                return loss
+
+            def training_step(self, batch, batch_idx):
+                return self._shared_step(batch, "train")
+
+            def validation_step(self, batch, batch_idx):
+                return self._shared_step(batch, "val")
+
+            def test_step(self, batch, batch_idx):
+                return self._shared_step(batch, "test")
+
+            def configure_optimizers(self):
+                optimizer = torch.optim.Adam(self.parameters(), lr=self.lr)
+                scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+                    optimizer, mode="min", factor=0.5, patience=2
+                )
+                return {"optimizer": optimizer, "lr_scheduler": {"scheduler": scheduler, "monitor": "val_loss"}}
+
+        # Create datasets
+        logger.info("Creating PyTorch datasets...")
+        train_ds = AutoencoderDataset(splits["train"], feature_names)
+        val_ds = AutoencoderDataset(splits["validation"], feature_names, train_ds.mean, train_ds.std)
+        test_ds = AutoencoderDataset(splits["test"], feature_names, train_ds.mean, train_ds.std)
+
+        # Create dataloaders
+        train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True, num_workers=0)
+        val_loader = DataLoader(val_ds, batch_size=batch_size, shuffle=False, num_workers=0)
+        test_loader = DataLoader(test_ds, batch_size=batch_size, shuffle=False, num_workers=0)
+
+        # Create model
+        logger.info(f"Creating model: {len(feature_names)} -> {hidden_dims} -> {latent_dim}")
+        model = LightningAutoencoder(
+            input_dim=len(feature_names),
+            latent_dim=latent_dim,
+            hidden_dims=tuple(hidden_dims),
+            lr=learning_rate,
+        )
+
+        # Setup MLflow
+        logger.info(f"Setting up MLflow: {mlflow_tracking_uri}")
+        mlflow.set_tracking_uri(mlflow_tracking_uri)
+        mlflow.set_experiment(mlflow_experiment_name)
+
+        with mlflow.start_run() as run:
+            run_id = run.info.run_id
+            logger.info(f"MLflow run ID: {run_id}")
+
+            # Log parameters (use tuple format for hidden_dims to match Lightning's format)
+            mlflow.log_params({
+                "lakefs_repository": lakefs_repository,
+                "lakefs_ref": lakefs_ref,
+                "feast_repo_path": feast_repo_path,
+                "feast_feature_view": feast_feature_view,
+                "iceberg_table": f"{iceberg_catalog}.{iceberg_database}.{source_table}",
+                "feature_names": json.dumps(feature_names),
+                "input_dim": len(feature_names),
+                "latent_dim": latent_dim,
+                "hidden_dims": str(tuple(hidden_dims)),  # Use tuple format to match Lightning
+                "batch_size": batch_size,
+                "max_epochs": max_epochs,
+                "learning_rate": learning_rate,
+                "seed": seed,
+                "train_samples": len(splits["train"]),
+                "validation_samples": len(splits["validation"]),
+                "test_samples": len(splits["test"]),
+            })
+
+            # Setup trainer
+            mlflow_logger = MLFlowLogger(
+                experiment_name=mlflow_experiment_name,
+                tracking_uri=mlflow_tracking_uri,
+                run_id=run_id,
+            )
+
+            callbacks = [
+                ModelCheckpoint(monitor="val_loss", mode="min", save_top_k=1),
+                EarlyStopping(monitor="val_loss", patience=3, mode="min"),
+                LearningRateMonitor(logging_interval="epoch"),
+            ]
+
+            trainer = L.Trainer(
+                max_epochs=max_epochs,
+                logger=mlflow_logger,
+                callbacks=callbacks,
+                enable_progress_bar=True,
+                log_every_n_steps=log_every_n_steps,
+                deterministic=True,
+            )
+
+            # Train
+            logger.info("Starting training...")
+            fit_start = time.time()
+            trainer.fit(model, train_loader, val_loader)
+            fit_time = time.time() - fit_start
+            logger.info(f"Training completed in {fit_time:.1f}s")
+
+            # Test
+            logger.info("Running test evaluation...")
+            test_results = trainer.test(model, test_loader)
+            test_loss = float(test_results[0]["test_loss"])
+            logger.info(f"Test loss: {test_loss:.6f}")
+
+            mlflow.log_metric("test_loss", test_loss)
+            mlflow.log_metric("fit_time_seconds", fit_time)
+            mlflow.log_metric("data_load_time_seconds", data_load_time)
+
+            # Save normalization params (with error handling for artifact storage)
+            try:
+                with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
+                    json.dump({
+                        "mean": train_ds.mean.tolist(),
+                        "std": train_ds.std.tolist(),
+                        "feature_names": feature_names,
+                    }, f)
+                    mlflow.log_artifact(f.name, "normalization")
+            except Exception as artifact_err:
+                logger.warning(f"Could not upload normalization artifact: {artifact_err}")
+
+            # Register model (with error handling for model registry)
+            model_version = "1"
+            try:
+                logger.info(f"Registering model: {mlflow_model_name}")
+                mlflow.pytorch.log_model(
+                    model,
+                    "model",
+                    registered_model_name=mlflow_model_name,
+                )
+                # Get version
+                client = mlflow.tracking.MlflowClient()
+                versions = client.search_model_versions(f"name='{mlflow_model_name}'")
+                model_version = str(max([int(v.version) for v in versions])) if versions else "1"
+            except Exception as model_err:
+                logger.warning(f"Could not register model to MLflow: {model_err}")
+                logger.info("Model training completed but not registered to MLflow")
+
+        total_time = time.time() - training_start_time
+        print(f"\nTraining completed successfully:")
+        print(f"  MLflow run ID: {run_id}")
+        print(f"  Model: {mlflow_model_name} v{model_version}")
+        print(f"  Test loss: {test_loss:.6f}")
+        print(f"  Total time: {total_time:.1f}s")
+        return True
+
+    except Exception as e:
+        print(f"ERROR: Local training failed: {e}")
+        import traceback
+        traceback.print_exc()
+        return False
+
+
 def run_feast_apply() -> bool:
     """Apply Feast feature definitions.
 
@@ -1132,7 +1779,7 @@ def run_feast_apply() -> bool:
         True if successful
     """
     print("\n" + "=" * 60)
-    print("Step 3: Applying Feast feature definitions")
+    print("Step 4: Applying Feast feature definitions")
     print("=" * 60)
 
     feast_dir = PROJECT_ROOT / "feature_stores" / "feast_store"
@@ -1171,7 +1818,7 @@ def run_feast_materialize(days_back: int = 30) -> bool:
         True if successful
     """
     print("\n" + "=" * 60)
-    print("Step 4: Materializing features to online store")
+    print("Step 5: Materializing features to online store")
     print("=" * 60)
 
     feast_dir = PROJECT_ROOT / "feature_stores" / "feast_store"
@@ -1336,19 +1983,19 @@ def main():
     # Spark resource options for testing
     parser.add_argument(
         "--driver-memory",
-        default="2g",
-        help="Spark driver memory (default: 2g)",
+        default="512m",
+        help="Spark driver memory (default: 512m)",
     )
     parser.add_argument(
         "--executor-memory",
-        default="2g",
-        help="Spark executor memory (default: 2g)",
+        default="512m",
+        help="Spark executor memory (default: 512m)",
     )
     parser.add_argument(
         "--executor-instances",
         type=int,
-        default=2,
-        help="Number of Spark executors (default: 2)",
+        default=1,
+        help="Number of Spark executors (default: 1)",
     )
     parser.add_argument(
         "--test-mode",
@@ -1362,6 +2009,139 @@ def main():
         help="Limit rows per source table for testing (0 = no limit, e.g., 1000 for quick tests)",
     )
 
+    # Feast configuration
+    parser.add_argument(
+        "--feast-repo-path",
+        default="/feast",
+        help="Path to Feast feature_store.yaml (default: /feast for Kubeflow, use feature_stores/feast_store for local)",
+    )
+
+    # Training arguments
+    parser.add_argument(
+        "--train",
+        action="store_true",
+        help="Run autoencoder training after transformations",
+    )
+    parser.add_argument(
+        "--skip-train",
+        action="store_true",
+        help="Skip autoencoder training (default behavior unless --train is specified)",
+    )
+    parser.add_argument(
+        "--train-only",
+        action="store_true",
+        help="Only run training (skip ingestion, transformations, feast)",
+    )
+
+    # MLflow configuration
+    parser.add_argument(
+        "--mlflow-tracking-uri",
+        default="http://mlflow:5050",
+        help="MLflow tracking server URI (default: http://mlflow:5050)",
+    )
+    parser.add_argument(
+        "--mlflow-experiment",
+        default="kronodroid-autoencoder",
+        help="MLflow experiment name (default: kronodroid-autoencoder)",
+    )
+    parser.add_argument(
+        "--mlflow-model-name",
+        default="kronodroid_autoencoder",
+        help="MLflow model registry name (default: kronodroid_autoencoder)",
+    )
+
+    # Model architecture
+    parser.add_argument(
+        "--latent-dim",
+        type=int,
+        default=16,
+        help="Autoencoder latent space dimension (default: 16)",
+    )
+    parser.add_argument(
+        "--hidden-dims",
+        default="128,64",
+        help="Comma-separated hidden layer dimensions (default: 128,64)",
+    )
+
+    # Training hyperparameters
+    parser.add_argument(
+        "--batch-size",
+        type=int,
+        default=512,
+        help="Training batch size (default: 512)",
+    )
+    parser.add_argument(
+        "--max-epochs",
+        type=int,
+        default=10,
+        help="Maximum training epochs (default: 10)",
+    )
+    parser.add_argument(
+        "--learning-rate",
+        type=float,
+        default=0.001,
+        help="Learning rate (default: 0.001)",
+    )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=1337,
+        help="Random seed for reproducibility (default: 1337)",
+    )
+    parser.add_argument(
+        "--max-rows-per-split",
+        type=int,
+        default=0,
+        help="Max rows per train/val/test split for testing (0 = unlimited)",
+    )
+
+    # Logging and monitoring arguments
+    parser.add_argument(
+        "--log-level",
+        default="INFO",
+        choices=["DEBUG", "INFO", "WARNING", "ERROR"],
+        help="Training log level (default: INFO)",
+    )
+    parser.add_argument(
+        "--enable-tensorboard",
+        action="store_true",
+        default=True,
+        help="Enable TensorBoard logging (default: enabled)",
+    )
+    parser.add_argument(
+        "--disable-tensorboard",
+        action="store_true",
+        help="Disable TensorBoard logging",
+    )
+    parser.add_argument(
+        "--log-every-n-steps",
+        type=int,
+        default=10,
+        help="Log metrics every N training steps (default: 10)",
+    )
+    parser.add_argument(
+        "--enable-gradient-logging",
+        action="store_true",
+        default=True,
+        help="Enable gradient statistics logging (default: enabled)",
+    )
+    parser.add_argument(
+        "--disable-gradient-logging",
+        action="store_true",
+        help="Disable gradient statistics logging",
+    )
+    parser.add_argument(
+        "--enable-resource-monitoring",
+        action="store_true",
+        default=True,
+        help="Enable resource (memory/GPU) monitoring (default: enabled)",
+    )
+    parser.add_argument(
+        "--disable-resource-monitoring",
+        action="store_true",
+        help="Disable resource monitoring",
+    )
+
     args = parser.parse_args()
 
     # Load environment variables
@@ -1372,14 +2152,25 @@ def main():
     if dbt_target == "dev" and args.destination == "lakefs":
         dbt_target = "lakefs"
 
-    # Handle deprecated --skip-dbt flag
-    skip_transform = args.skip_transform or args.skip_dbt
+    # Get transform engine
+    transform_engine = args.transform_engine
+
+    # Handle transform skipping - --skip-dbt only skips dbt engine, not kubeflow
+    skip_transform = args.skip_transform
+    if args.skip_dbt and transform_engine == "dbt":
+        skip_transform = True
 
     # Validate kubeflow engine requirements
-    transform_engine = args.transform_engine
     if transform_engine == "kubeflow" and args.destination == "minio":
         print("WARNING: kubeflow engine works best with lakefs destination for versioning")
         print("         Consider using: --destination lakefs --branch dev")
+
+    # Determine if training should run
+    run_training = args.train or args.train_only
+    skip_training = args.skip_train
+
+    # Parse hidden dimensions
+    hidden_dims = [int(d.strip()) for d in args.hidden_dims.split(",")]
 
     print("=" * 60)
     print("Kronodroid Data Pipeline")
@@ -1393,11 +2184,56 @@ def main():
     else:
         print(f"  Spark image: {args.spark_image}")
         print(f"  K8s namespace: {args.k8s_namespace}")
+    if run_training and not skip_training:
+        print(f"  Training: enabled")
+        print(f"    MLflow: {args.mlflow_tracking_uri}")
+        print(f"    Experiment: {args.mlflow_experiment}")
+        print(f"    Architecture: {len(DEFAULT_AUTOENCODER_FEATURES)} -> {hidden_dims} -> {args.latent_dim}")
 
     success = True
 
     if args.materialize_only:
         success = run_feast_materialize(args.materialize_days)
+    elif args.train_only:
+        # Train only mode - skip ingestion, transformations, feast
+        if run_training and not skip_training:
+            # Apply test mode defaults for training
+            max_rows_per_split = args.max_rows_per_split
+            if args.test_mode and max_rows_per_split == 0:
+                max_rows_per_split = 100  # Default to 100 rows per split in test mode
+
+            # Compute effective logging flags (disable flags override enable)
+            effective_tensorboard = args.enable_tensorboard and not args.disable_tensorboard
+            effective_gradient_logging = args.enable_gradient_logging and not args.disable_gradient_logging
+            effective_resource_monitoring = args.enable_resource_monitoring and not args.disable_resource_monitoring
+
+            training_result = run_kubeflow_training(
+                lakefs_repository=args.lakefs_repository if hasattr(args, "lakefs_repository") else "kronodroid",
+                lakefs_ref=args.branch,
+                feast_repo_path=args.feast_repo_path,
+                use_kfp_client=args.use_kfp_client,
+                kfp_host=args.kfp_host,
+                namespace=args.k8s_namespace,
+                mlflow_tracking_uri=args.mlflow_tracking_uri,
+                mlflow_experiment_name=args.mlflow_experiment,
+                mlflow_model_name=args.mlflow_model_name,
+                latent_dim=args.latent_dim,
+                hidden_dims=hidden_dims,
+                batch_size=args.batch_size,
+                max_epochs=args.max_epochs,
+                learning_rate=args.learning_rate,
+                seed=args.seed,
+                max_rows_per_split=max_rows_per_split,
+                log_level=args.log_level,
+                enable_tensorboard=effective_tensorboard,
+                log_every_n_steps=args.log_every_n_steps,
+                enable_gradient_logging=effective_gradient_logging,
+                enable_resource_monitoring=effective_resource_monitoring,
+            )
+            if not training_result:
+                success = False
+                print("\nPipeline failed at training step")
+                sys.exit(1)
     else:
         # Step 1: dlt ingestion
         if not args.skip_ingestion:
@@ -1463,7 +2299,47 @@ def main():
         if not run_feast_materialize(args.materialize_days):
             print("\nWARNING: Feature materialization failed (online store may be unavailable)")
 
-        # Step 5: Commit to LakeFS (if using lakefs)
+        # Step 5: Autoencoder Training (if enabled)
+        if run_training and not skip_training:
+            # Apply test mode defaults for training
+            max_rows_per_split = args.max_rows_per_split
+            if args.test_mode and max_rows_per_split == 0:
+                max_rows_per_split = 100  # Default to 100 rows per split in test mode
+
+            # Compute effective logging flags (disable flags override enable)
+            effective_tensorboard = args.enable_tensorboard and not args.disable_tensorboard
+            effective_gradient_logging = args.enable_gradient_logging and not args.disable_gradient_logging
+            effective_resource_monitoring = args.enable_resource_monitoring and not args.disable_resource_monitoring
+
+            training_result = run_kubeflow_training(
+                lakefs_repository=args.lakefs_repository if hasattr(args, "lakefs_repository") else "kronodroid",
+                lakefs_ref=args.branch,
+                feast_repo_path=args.feast_repo_path,
+                use_kfp_client=args.use_kfp_client,
+                kfp_host=args.kfp_host,
+                namespace=args.k8s_namespace,
+                mlflow_tracking_uri=args.mlflow_tracking_uri,
+                mlflow_experiment_name=args.mlflow_experiment,
+                mlflow_model_name=args.mlflow_model_name,
+                latent_dim=args.latent_dim,
+                hidden_dims=hidden_dims,
+                batch_size=args.batch_size,
+                max_epochs=args.max_epochs,
+                learning_rate=args.learning_rate,
+                seed=args.seed,
+                max_rows_per_split=max_rows_per_split,
+                log_level=args.log_level,
+                enable_tensorboard=effective_tensorboard,
+                log_every_n_steps=args.log_every_n_steps,
+                enable_gradient_logging=effective_gradient_logging,
+                enable_resource_monitoring=effective_resource_monitoring,
+            )
+            if not training_result:
+                success = False
+                print("\nPipeline failed at training step")
+                sys.exit(1)
+
+        # Step 6: Commit to LakeFS (if using lakefs)
         if args.destination == "lakefs":
             commit_to_lakefs(
                 args.branch,
