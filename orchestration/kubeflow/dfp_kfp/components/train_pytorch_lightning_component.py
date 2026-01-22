@@ -39,23 +39,24 @@ class TrainAutoencoderOutput(NamedTuple):
     test_samples: int
 
 
+# Default training image with pre-installed dependencies
+# Build with: docker build -t dfp-kfp-training:latest -f tools/docker/Dockerfile.kfp_training .
+# For Kind: kind load docker-image dfp-kfp-training:latest --name dfp-kind
+DEFAULT_TRAINING_IMAGE = "dfp-kfp-training:latest"
+
+
 @dsl.component(
-    # Use Apache Spark image which includes Java, Spark, and Python
-    # This is required for Iceberg/Spark data loading
-    base_image="apache/spark:3.5.0-python3",
-    packages_to_install=[
-        "mlflow>=2.0",
-        "torch>=2.0",
-        "lightning>=2.0",
-        "feast[redis]>=0.32",  # Feast for feature retrieval
-        "pyspark==3.5.0",  # Match Spark version in base image
-        "pandas>=2.0",
-        "numpy>=1.24",
-        "requests>=2.31",
-        "pyarrow>=14.0",
-        "psutil>=5.9",  # For resource monitoring
-        "tensorboard>=2.10,<2.15",  # For TensorBoard logging (compatible with Python in Spark image)
-    ],
+    # Use pre-built image with all dependencies installed
+    # This eliminates runtime pip installs for faster startup and better log visibility
+    # Falls back to base Spark image with runtime installs if custom image not available
+    base_image=DEFAULT_TRAINING_IMAGE,
+    # No packages_to_install - all deps are pre-installed in the custom image
+    # If using apache/spark:3.5.0-python3, uncomment packages_to_install below:
+    # packages_to_install=[
+    #     "mlflow>=2.0", "torch>=2.0", "lightning>=2.0", "feast[redis]>=0.32",
+    #     "pyspark==3.5.0", "pandas>=2.0", "numpy>=1.24", "requests>=2.31",
+    #     "pyarrow>=14.0", "psutil>=5.9", "tensorboard>=2.10,<2.15",
+    # ],
 )
 def train_kronodroid_autoencoder_op(
     # MLflow config

@@ -1311,6 +1311,197 @@ def run_kubeflow_training(
         )
 
 
+def _ensure_feast_configmap(
+    namespace: str,
+    lakefs_endpoint: str,
+    lakefs_repository: str,
+    redis_connection_string: str = "redis://redis:6379",
+    configmap_name: str = "feast-config",
+) -> None:
+    """Ensure the feast-config ConfigMap exists in the target namespace.
+
+    The ConfigMap contains the Feast feature_store.yaml configuration that the
+    KFP training component mounts at /feast. It's configured with in-cluster
+    service endpoints for LakeFS, MinIO, and Redis.
+
+    Args:
+        namespace: Kubernetes namespace where KFP runs (typically 'kubeflow')
+        lakefs_endpoint: LakeFS endpoint URL (in-cluster)
+        lakefs_repository: LakeFS repository name for Iceberg warehouse
+        redis_connection_string: Redis connection string for online store
+        configmap_name: Name of the ConfigMap to create
+    """
+    from kubernetes import client, config
+    from kubernetes.client.rest import ApiException
+
+    # Configure Kubernetes client
+    try:
+        config.load_incluster_config()
+    except config.ConfigException:
+        config.load_kube_config()
+
+    core_api = client.CoreV1Api()
+
+    # Build feast feature_store.yaml content with in-cluster endpoints
+    # Note: Spark 3.5 compatible JAR versions
+    feast_config = f"""project: dfp
+provider: local
+
+# Registry for feature definitions (stored locally in the container)
+registry:
+  path: /feast/data/registry.db
+  cache_ttl_seconds: 60
+
+# Offline store using Spark with LakeFS Iceberg catalog
+offline_store:
+  type: spark
+  spark_conf:
+    # Iceberg extensions
+    spark.sql.extensions: org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions
+    # LakeFS Iceberg catalog (Hadoop-based)
+    spark.sql.catalog.lakefs: org.apache.iceberg.spark.SparkCatalog
+    spark.sql.catalog.lakefs.type: hadoop
+    spark.sql.catalog.lakefs.warehouse: s3a://{lakefs_repository}/main/iceberg
+    # S3A filesystem for LakeFS S3 gateway
+    spark.hadoop.fs.s3a.impl: org.apache.hadoop.fs.s3a.S3AFileSystem
+    spark.hadoop.fs.s3a.path.style.access: "true"
+    spark.hadoop.fs.s3a.connection.ssl.enabled: "false"
+    # Per-bucket config for LakeFS repository
+    spark.hadoop.fs.s3a.bucket.{lakefs_repository}.endpoint: {lakefs_endpoint}
+    # Default S3A endpoint for LakeFS
+    spark.hadoop.fs.s3a.endpoint: {lakefs_endpoint}
+    # Maven packages for Iceberg + S3A (Spark 3.5 compatible)
+    spark.jars.packages: org.apache.iceberg:iceberg-spark-runtime-3.5_2.12:1.4.3,org.apache.hadoop:hadoop-aws:3.3.4,com.amazonaws:aws-java-sdk-bundle:1.12.262
+
+# Online store using Redis for low-latency serving
+online_store:
+  type: redis
+  connection_string: {redis_connection_string}
+
+# Entity key serialization (v3 recommended)
+entity_key_serialization_version: 3
+
+# Flags
+flags:
+  alpha_features: true
+  on_demand_transforms: true
+"""
+
+    configmap_data = {"feature_store.yaml": feast_config}
+
+    # Check if ConfigMap already exists
+    try:
+        existing_cm = core_api.read_namespaced_config_map(configmap_name, namespace)
+        # Update if content differs
+        if existing_cm.data != configmap_data:
+            print(f"  Updating ConfigMap '{configmap_name}' in namespace '{namespace}'")
+            existing_cm.data = configmap_data
+            core_api.replace_namespaced_config_map(configmap_name, namespace, existing_cm)
+        else:
+            print(f"  ConfigMap '{configmap_name}' already exists in namespace '{namespace}'")
+    except ApiException as e:
+        if e.status != 404:
+            raise
+        # Create the ConfigMap
+        print(f"  Creating ConfigMap '{configmap_name}' in namespace '{namespace}'")
+        configmap = client.V1ConfigMap(
+            metadata=client.V1ObjectMeta(
+                name=configmap_name,
+                labels={
+                    "app": "dfp",
+                    "component": "feast",
+                },
+            ),
+            data=configmap_data,
+        )
+        core_api.create_namespaced_config_map(namespace, configmap)
+
+
+def _ensure_kfp_secrets(
+    namespace: str,
+    minio_secret_name: str = "minio-credentials",
+    lakefs_secret_name: str = "lakefs-credentials",
+) -> None:
+    """Ensure the required secrets exist in the KFP namespace.
+
+    The training component needs access to MinIO (for MLflow artifacts) and
+    LakeFS (for Iceberg data). The secrets are configured via environment
+    variables from the local environment.
+
+    Args:
+        namespace: Kubernetes namespace where KFP runs (typically 'kubeflow')
+        minio_secret_name: Name of the MinIO credentials secret
+        lakefs_secret_name: Name of the LakeFS credentials secret
+    """
+    from kubernetes import client, config
+    from kubernetes.client.rest import ApiException
+
+    # Configure Kubernetes client
+    try:
+        config.load_incluster_config()
+    except config.ConfigException:
+        config.load_kube_config()
+
+    core_api = client.CoreV1Api()
+
+    def ensure_secret(secret_name: str, data: dict[str, str]) -> None:
+        """Create or update a secret."""
+        # Filter out empty values
+        secret_data = {k: v for k, v in data.items() if v}
+        if not secret_data:
+            print(f"  WARNING: No credentials found for secret '{secret_name}'")
+            return
+
+        try:
+            existing = core_api.read_namespaced_secret(secret_name, namespace)
+            # Check if we need to update
+            needs_update = False
+            for key in secret_data:
+                if key not in (existing.data or {}):
+                    needs_update = True
+                    break
+            if needs_update:
+                print(f"  Updating secret '{secret_name}' in namespace '{namespace}'")
+                existing.string_data = secret_data
+                core_api.replace_namespaced_secret(secret_name, namespace, existing)
+            else:
+                print(f"  Secret '{secret_name}' already exists in namespace '{namespace}'")
+        except ApiException as e:
+            if e.status != 404:
+                raise
+            print(f"  Creating secret '{secret_name}' in namespace '{namespace}'")
+            secret = client.V1Secret(
+                metadata=client.V1ObjectMeta(
+                    name=secret_name,
+                    labels={
+                        "app": "dfp",
+                        "component": "credentials",
+                    },
+                ),
+                type="Opaque",
+                string_data=secret_data,
+            )
+            core_api.create_namespaced_secret(namespace, secret)
+
+    # Ensure MinIO credentials secret
+    ensure_secret(
+        minio_secret_name,
+        {
+            "access-key": os.getenv("MINIO_ACCESS_KEY_ID", os.getenv("AWS_ACCESS_KEY_ID", "")),
+            "secret-key": os.getenv("MINIO_SECRET_ACCESS_KEY", os.getenv("AWS_SECRET_ACCESS_KEY", "")),
+        },
+    )
+
+    # Ensure LakeFS credentials secret
+    ensure_secret(
+        lakefs_secret_name,
+        {
+            "access-key": os.getenv("LAKEFS_ACCESS_KEY_ID", ""),
+            "secret-key": os.getenv("LAKEFS_SECRET_ACCESS_KEY", ""),
+        },
+    )
+
+
 def _run_training_via_kfp_client(
     kfp_host: str | None,
     mlflow_tracking_uri: str,
@@ -1341,6 +1532,7 @@ def _run_training_via_kfp_client(
     minio_secret_name: str,
     lakefs_secret_name: str,
     timeout_seconds: int,
+    kfp_namespace: str = "kubeflow",
 ) -> bool:
     """Submit the training pipeline via KFP client."""
     import json
@@ -1359,6 +1551,23 @@ def _run_training_via_kfp_client(
         kfp_host = os.getenv("KFP_HOST", "http://localhost:8080")
 
     print(f"  KFP host: {kfp_host}")
+
+    # Ensure the feast-config ConfigMap and required secrets exist in the KFP namespace
+    # This is required by the training component which mounts them
+    try:
+        _ensure_feast_configmap(
+            namespace=kfp_namespace,
+            lakefs_endpoint=lakefs_endpoint,
+            lakefs_repository=lakefs_repository,
+        )
+        _ensure_kfp_secrets(
+            namespace=kfp_namespace,
+            minio_secret_name=minio_secret_name,
+            lakefs_secret_name=lakefs_secret_name,
+        )
+    except Exception as e:
+        print(f"WARNING: Could not ensure K8s resources in '{kfp_namespace}' namespace: {e}")
+        print("  The pipeline may fail if resources don't exist.")
 
     try:
         client = kfp.Client(host=kfp_host)

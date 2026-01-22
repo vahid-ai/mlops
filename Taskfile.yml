@@ -27,6 +27,7 @@ tasks:
       - task: spark-operator:install
       - task: kubeflow:install
       - task: spark-image
+      - task: kfp-training-image
 
   down:
     desc: Delete kind cluster
@@ -120,6 +121,26 @@ tasks:
     cmds:
       - task: spark-image:build
       - task: spark-image:load
+
+  kfp-training-image:build:
+    desc: Build the dfp-kfp-training Docker image (for KFP autoencoder training)
+    vars:
+      KFP_TRAINING_IMAGE: '{{.KFP_TRAINING_IMAGE | default "dfp-kfp-training:latest"}}'
+    cmds:
+      - docker build -t "{{.KFP_TRAINING_IMAGE}}" -f tools/docker/Dockerfile.kfp_training .
+
+  kfp-training-image:load:
+    desc: Load dfp-kfp-training image into kind cluster
+    vars:
+      KFP_TRAINING_IMAGE: '{{.KFP_TRAINING_IMAGE | default "dfp-kfp-training:latest"}}'
+    cmds:
+      - kind load docker-image "{{.KFP_TRAINING_IMAGE}}" --name "{{.CLUSTER_NAME}}"
+
+  kfp-training-image:
+    desc: Build and load dfp-kfp-training image into kind (for KFP autoencoder training)
+    cmds:
+      - task: kfp-training-image:build
+      - task: kfp-training-image:load
 
   spark-operator:install:
     desc: Install Spark Operator via Helm
