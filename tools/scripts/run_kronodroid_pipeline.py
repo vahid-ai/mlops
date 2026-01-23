@@ -1315,6 +1315,7 @@ def _ensure_feast_configmap(
     namespace: str,
     lakefs_endpoint: str,
     lakefs_repository: str,
+    lakefs_ref: str = "main",
     redis_connection_string: str = "redis://redis:6379",
     configmap_name: str = "feast-config",
 ) -> None:
@@ -1342,14 +1343,47 @@ def _ensure_feast_configmap(
 
     core_api = client.CoreV1Api()
 
+    # Optional: include a pre-built Feast registry so the training component can
+    # resolve feature views without needing to run `feast apply` in-cluster.
+    registry_binary_data: dict[str, str] = {}
+    registry_b64_data: dict[str, str] = {}
+    local_registry_path = (
+        PROJECT_ROOT / "feature_stores" / "feast_store" / "data" / "registry.db"
+    )
+    if local_registry_path.exists():
+        import base64
+
+        registry_bytes = local_registry_path.read_bytes()
+        if registry_bytes:
+            print(f"  Including Feast registry: {local_registry_path} ({len(registry_bytes)} bytes)")
+            registry_binary_data = {
+                "registry.db": base64.b64encode(registry_bytes).decode("ascii")
+            }
+            # Also ship a text/base64 version for environments that don't mount
+            # ConfigMap binaryData as expected.
+            registry_b64_data = {
+                "registry.db.b64": base64.b64encode(registry_bytes).decode("ascii")
+            }
+    else:
+        print(
+            f"  WARNING: Feast registry not found at {local_registry_path}. "
+            "Run `feast apply` in `feature_stores/feast_store` to generate it."
+        )
+
     # Build feast feature_store.yaml content with in-cluster endpoints
     # Note: Spark 3.5 compatible JAR versions
+    lakefs_endpoint = (lakefs_endpoint or "").strip()
+    lakefs_repository = (lakefs_repository or "").strip()
+    lakefs_ref = (lakefs_ref or "main").strip()
+
     feast_config = f"""project: dfp
 provider: local
 
-# Registry for feature definitions (stored locally in the container)
+# Registry for feature definitions (stored locally in the container).
+# NOTE: The Feast repo is mounted from a ConfigMap (read-only), so the registry
+# must live somewhere writable.
 registry:
-  path: /feast/data/registry.db
+  path: /tmp/feast/registry.db
   cache_ttl_seconds: 60
 
 # Offline store using Spark with LakeFS Iceberg catalog
@@ -1361,15 +1395,20 @@ offline_store:
     # LakeFS Iceberg catalog (Hadoop-based)
     spark.sql.catalog.lakefs: org.apache.iceberg.spark.SparkCatalog
     spark.sql.catalog.lakefs.type: hadoop
-    spark.sql.catalog.lakefs.warehouse: s3a://{lakefs_repository}/main/iceberg
+    spark.sql.catalog.lakefs.warehouse: s3a://{lakefs_repository}/{lakefs_ref}/iceberg
     # S3A filesystem for LakeFS S3 gateway
     spark.hadoop.fs.s3a.impl: org.apache.hadoop.fs.s3a.S3AFileSystem
+    spark.hadoop.fs.s3a.aws.credentials.provider: org.apache.hadoop.fs.s3a.SimpleAWSCredentialsProvider
     spark.hadoop.fs.s3a.path.style.access: "true"
     spark.hadoop.fs.s3a.connection.ssl.enabled: "false"
     # Per-bucket config for LakeFS repository
     spark.hadoop.fs.s3a.bucket.{lakefs_repository}.endpoint: {lakefs_endpoint}
+    spark.hadoop.fs.s3a.bucket.{lakefs_repository}.access.key: "${{LAKEFS_ACCESS_KEY_ID}}"
+    spark.hadoop.fs.s3a.bucket.{lakefs_repository}.secret.key: "${{LAKEFS_SECRET_ACCESS_KEY}}"
     # Default S3A endpoint for LakeFS
     spark.hadoop.fs.s3a.endpoint: {lakefs_endpoint}
+    spark.hadoop.fs.s3a.access.key: "${{LAKEFS_ACCESS_KEY_ID}}"
+    spark.hadoop.fs.s3a.secret.key: "${{LAKEFS_SECRET_ACCESS_KEY}}"
     # Maven packages for Iceberg + S3A (Spark 3.5 compatible)
     spark.jars.packages: org.apache.iceberg:iceberg-spark-runtime-3.5_2.12:1.4.3,org.apache.hadoop:hadoop-aws:3.3.4,com.amazonaws:aws-java-sdk-bundle:1.12.262
 
@@ -1387,15 +1426,21 @@ flags:
   on_demand_transforms: true
 """
 
-    configmap_data = {"feature_store.yaml": feast_config}
+    configmap_data = {"feature_store.yaml": feast_config, **registry_b64_data}
 
     # Check if ConfigMap already exists
     try:
         existing_cm = core_api.read_namespaced_config_map(configmap_name, namespace)
+        needs_update = existing_cm.data != configmap_data
+        if registry_binary_data and (existing_cm.binary_data or {}) != registry_binary_data:
+            needs_update = True
+
         # Update if content differs
-        if existing_cm.data != configmap_data:
+        if needs_update:
             print(f"  Updating ConfigMap '{configmap_name}' in namespace '{namespace}'")
             existing_cm.data = configmap_data
+            if registry_binary_data:
+                existing_cm.binary_data = registry_binary_data
             core_api.replace_namespaced_config_map(configmap_name, namespace, existing_cm)
         else:
             print(f"  ConfigMap '{configmap_name}' already exists in namespace '{namespace}'")
@@ -1413,6 +1458,7 @@ flags:
                 },
             ),
             data=configmap_data,
+            binary_data=registry_binary_data or None,
         )
         core_api.create_namespaced_config_map(namespace, configmap)
 
@@ -1446,6 +1492,8 @@ def _ensure_kfp_secrets(
 
     def ensure_secret(secret_name: str, data: dict[str, str]) -> None:
         """Create or update a secret."""
+        import base64
+
         # Filter out empty values
         secret_data = {k: v for k, v in data.items() if v}
         if not secret_data:
@@ -1454,12 +1502,23 @@ def _ensure_kfp_secrets(
 
         try:
             existing = core_api.read_namespaced_secret(secret_name, namespace)
-            # Check if we need to update
+            # Update if any key is missing or any value differs.
             needs_update = False
-            for key in secret_data:
-                if key not in (existing.data or {}):
+            existing_data = existing.data or {}
+            for key, desired in secret_data.items():
+                current_b64 = existing_data.get(key)
+                if not current_b64:
                     needs_update = True
                     break
+                try:
+                    current = base64.b64decode(current_b64).decode("utf-8")
+                except Exception:
+                    needs_update = True
+                    break
+                if current != desired:
+                    needs_update = True
+                    break
+
             if needs_update:
                 print(f"  Updating secret '{secret_name}' in namespace '{namespace}'")
                 existing.string_data = secret_data
@@ -1536,6 +1595,7 @@ def _run_training_via_kfp_client(
 ) -> bool:
     """Submit the training pipeline via KFP client."""
     import json
+    import base64
 
     try:
         import kfp
@@ -1559,6 +1619,7 @@ def _run_training_via_kfp_client(
             namespace=kfp_namespace,
             lakefs_endpoint=lakefs_endpoint,
             lakefs_repository=lakefs_repository,
+            lakefs_ref=lakefs_ref,
         )
         _ensure_kfp_secrets(
             namespace=kfp_namespace,
@@ -1571,6 +1632,24 @@ def _run_training_via_kfp_client(
 
     try:
         client = kfp.Client(host=kfp_host)
+
+        # Provide Feast registry directly as a pipeline parameter to avoid relying on
+        # `feast apply` in-cluster or extra files mounted at /feast.
+        feast_registry_b64 = ""
+        local_registry_path = (
+            PROJECT_ROOT / "feature_stores" / "feast_store" / "data" / "registry.db"
+        )
+        if local_registry_path.exists():
+            registry_bytes = local_registry_path.read_bytes()
+            if registry_bytes:
+                feast_registry_b64 = base64.b64encode(registry_bytes).decode("ascii")
+            else:
+                print(f"  WARNING: Feast registry is empty at {local_registry_path}")
+        else:
+            print(
+                f"  WARNING: Feast registry not found at {local_registry_path}. "
+                "Feature view lookup will fail unless the registry is populated."
+            )
 
         run = client.create_run_from_pipeline_func(
             kronodroid_autoencoder_training_pipeline,
@@ -1590,6 +1669,7 @@ def _run_training_via_kfp_client(
                 "feast_repo_path": feast_repo_path,
                 "feast_feature_view": feast_feature_view,
                 "feature_names_json": json.dumps(feature_names),
+                "feast_registry_b64": feast_registry_b64,
                 "latent_dim": latent_dim,
                 "hidden_dims_json": json.dumps(hidden_dims),
                 "batch_size": batch_size,

@@ -75,6 +75,7 @@ def train_kronodroid_autoencoder_op(
     learning_rate: float,
     seed: int,
     max_rows_per_split: int,
+    feast_registry_b64: str = "",
     # MLflow artifact storage (S3/MinIO)
     minio_endpoint: str = "http://minio:9000",
     # Logging and monitoring config
@@ -573,6 +574,11 @@ def train_kronodroid_autoencoder_op(
                 for match in re.finditer(r'\$\{(\w+)\}', value):
                     env_var = match.group(1)
                     env_val = os.environ.get(env_var, "")
+                    if env_val == "":
+                        logger.warning(
+                            f"Spark config references unset env var '{env_var}' (key: {key}); "
+                            "S3A/LakeFS access may fail."
+                        )
                     value = value.replace(f"${{{env_var}}}", env_val)
             builder = builder.config(key, str(value))
 
@@ -615,6 +621,7 @@ def train_kronodroid_autoencoder_op(
         feature_columns: List[str],
         max_rows: Optional[int],
         iceberg_table: str = "",
+        registry_b64: str = "",
     ) -> Tuple[Dict[str, pd.DataFrame], Dict[str, any]]:
         """Load training data from Feast feature store.
 
@@ -642,6 +649,37 @@ def train_kronodroid_autoencoder_op(
                 f"Feast config not found at {feast_config_path}. "
                 "Ensure the 'feast-config' ConfigMap is mounted at /feast"
             )
+
+        # If a pre-built registry is provided, copy/write it into the writable path
+        # referenced by the config. This avoids needing to run `feast apply` inside
+        # the training container.
+        try:
+            import base64
+            import shutil
+
+            registry_src = Path(repo_path) / "registry.db"
+            registry_b64_src = Path(repo_path) / "registry.db.b64"
+            registry_dst = Path("/tmp/feast/registry.db")
+            registry_dst.parent.mkdir(parents=True, exist_ok=True)
+
+            if registry_b64:
+                logger.info("Decoding Feast registry from pipeline parameter into: /tmp/feast/registry.db")
+                registry_dst.write_bytes(base64.b64decode(registry_b64.strip()))
+            elif registry_src.exists():
+                logger.info("Using Feast registry from: /feast/registry.db")
+                shutil.copyfile(registry_src, registry_dst)
+            elif registry_b64_src.exists():
+                logger.info("Decoding Feast registry from: /feast/registry.db.b64")
+                registry_b64 = registry_b64_src.read_text(encoding="utf-8").strip()
+                if registry_b64:
+                    registry_dst.write_bytes(base64.b64decode(registry_b64))
+            else:
+                logger.warning(
+                    "No Feast registry file found at /feast/registry.db or /feast/registry.db.b64; "
+                    "feature view lookup may fail unless the registry is populated."
+                )
+        except Exception as e:
+            logger.warning(f"Could not prepare Feast registry file: {e}")
 
         # Try Feast first
         try:
@@ -787,6 +825,7 @@ def train_kronodroid_autoencoder_op(
         feature_columns=feature_names,
         max_rows=max_rows,
         iceberg_table=iceberg_table_full,
+        registry_b64=feast_registry_b64,
     )
     data_load_time = time.time() - data_load_start
     logger.info(f"Data loading completed in {data_load_time:.1f}s")

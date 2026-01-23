@@ -105,6 +105,7 @@ def kronodroid_autoencoder_training_pipeline(
     feast_project: str = DEFAULT_FEAST_PROJECT,
     feast_feature_view: str = DEFAULT_FEAST_FEATURE_VIEW,
     feature_names_json: str = json.dumps(DEFAULT_FEATURE_NAMES),
+    feast_registry_b64: str = "",
     # Model architecture
     latent_dim: int = DEFAULT_LATENT_DIM,
     hidden_dims_json: str = json.dumps(DEFAULT_HIDDEN_DIMS),
@@ -185,6 +186,7 @@ def kronodroid_autoencoder_training_pipeline(
         feast_project=feast_project,
         feast_feature_view=feast_feature_view,
         feature_names_json=feature_names_json,
+        feast_registry_b64=feast_registry_b64,
         # Model config
         latent_dim=latent_dim,
         hidden_dims_json=hidden_dims_json,

@@ -9,7 +9,13 @@ data:
     provider: local
 
     registry:
-      path: /feast/data/registry.db
+      # NOTE: /feast is mounted from a ConfigMap (read-only), so the registry
+      # must live somewhere writable.
+      #
+      # For KFP training, also include a pre-built registry in this ConfigMap
+      # (binaryData key: registry.db) or create/update it via
+      # `tools/scripts/run_kronodroid_pipeline.py --use-kfp-client`.
+      path: /tmp/feast/registry.db
       cache_ttl_seconds: 60
 
     offline_store:
@@ -23,6 +29,7 @@ data:
         spark.sql.catalog.lakefs.warehouse: s3a://kronodroid/main/iceberg
         # S3A filesystem for LakeFS
         spark.hadoop.fs.s3a.impl: org.apache.hadoop.fs.s3a.S3AFileSystem
+        spark.hadoop.fs.s3a.aws.credentials.provider: org.apache.hadoop.fs.s3a.SimpleAWSCredentialsProvider
         spark.hadoop.fs.s3a.path.style.access: "true"
         spark.hadoop.fs.s3a.connection.ssl.enabled: "false"
         # S3A credentials from env vars (set by K8s secrets)
