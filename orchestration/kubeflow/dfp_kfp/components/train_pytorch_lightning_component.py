@@ -576,6 +576,17 @@ def train_kronodroid_autoencoder_op(
                     value = value.replace(f"${{{env_var}}}", env_val)
             builder = builder.config(key, str(value))
 
+        # Inject S3A credentials from environment variables (set by K8s secrets)
+        # These are required for LakeFS S3 gateway authentication
+        lakefs_access_key = os.environ.get("LAKEFS_ACCESS_KEY_ID", "")
+        lakefs_secret_key = os.environ.get("LAKEFS_SECRET_ACCESS_KEY", "")
+        if lakefs_access_key and lakefs_secret_key:
+            logger.info("Injecting LakeFS credentials from environment into Spark S3A config")
+            builder = builder.config("spark.hadoop.fs.s3a.access.key", lakefs_access_key)
+            builder = builder.config("spark.hadoop.fs.s3a.secret.key", lakefs_secret_key)
+        else:
+            logger.warning("LAKEFS_ACCESS_KEY_ID/LAKEFS_SECRET_ACCESS_KEY not set - S3A auth may fail")
+
         spark_session = builder.getOrCreate()
         logger.info(f"Spark session created, reading from: {iceberg_table}")
 

@@ -71,6 +71,29 @@ def _is_localhost_url(url: str) -> bool:
     return parsed.hostname in {"localhost", "127.0.0.1"} if parsed.hostname else False
 
 
+def _needs_fqdn_rewrite(url: str) -> bool:
+    """Check if a URL needs to be rewritten to use FQDN for in-cluster access.
+
+    Returns True if the URL is:
+    - A localhost URL (localhost, 127.0.0.1)
+    - A short hostname without domain (e.g., 'mlflow', 'lakefs', 'minio')
+    """
+    try:
+        parsed = urlparse(url)
+    except Exception:
+        return False
+    if not parsed.hostname:
+        return False
+    # Localhost always needs rewriting
+    if parsed.hostname in {"localhost", "127.0.0.1"}:
+        return True
+    # Short hostnames (no dots) need FQDN rewriting for cross-namespace access
+    if "." not in parsed.hostname:
+        return True
+    # Already FQDN (e.g., mlflow.dfp.svc.cluster.local)
+    return False
+
+
 def _k8s_service_url(service: str, namespace: str, port: int) -> str:
     return f"http://{service}.{namespace}.svc.cluster.local:{port}"
 
@@ -455,12 +478,12 @@ def run_kubeflow_transformations(
     # Preserve host-accessible endpoints for LakeFS API calls (branch/commit/merge).
     lakefs_api_endpoint = lakefs_endpoint
 
-    # Spark runs inside the cluster, so rewrite localhost endpoints to in-cluster Service DNS.
+    # Spark runs inside the cluster, so rewrite URLs to FQDN for in-cluster DNS resolution.
     minio_cluster_endpoint = (
-        _k8s_service_url("minio", namespace, 9000) if _is_localhost_url(minio_endpoint) else minio_endpoint
+        _k8s_service_url("minio", namespace, 9000) if _needs_fqdn_rewrite(minio_endpoint) else minio_endpoint
     )
     lakefs_cluster_endpoint = (
-        _k8s_service_url("lakefs", namespace, 8000) if _is_localhost_url(lakefs_endpoint) else lakefs_endpoint
+        _k8s_service_url("lakefs", namespace, 8000) if _needs_fqdn_rewrite(lakefs_endpoint) else lakefs_endpoint
     )
 
     # For `--destination lakefs`, dlt writes raw data to the LakeFS S3 gateway bucket
@@ -680,20 +703,18 @@ def _run_kubeflow_via_sparkapplication(
 
     run_id = str(uuid.uuid4())[:8]
     app_name = f"kronodroid-iceberg-{run_id}"
-    per_run_branch = f"spark-{run_id}"
 
     print(f"  Run ID: {run_id}")
     print(f"  SparkApplication: {app_name}")
-    print(f"  Per-run branch: {per_run_branch}")
-
-    # Create per-run LakeFS branch
-    if not _create_lakefs_branch(lakefs_api_endpoint, lakefs_repository, per_run_branch, lakefs_branch):
-        return False
+    print(f"  Target branch: {lakefs_branch}")
 
     # Build SparkApplication manifest
     # Use Hadoop-based Iceberg catalog since LakeFS OSS doesn't include REST catalog
+    # IMPORTANT: Use the target branch (not a per-run branch) for the warehouse path.
+    # Iceberg metadata embeds absolute S3 paths, so if we used per-run branches,
+    # the paths would become invalid after merge and branch deletion.
     catalog_name = "lakefs"
-    warehouse_path = f"s3a://{lakefs_repository}/{per_run_branch}/iceberg"
+    warehouse_path = f"s3a://{lakefs_repository}/{lakefs_branch}/iceberg"
 
     minio_access_key = os.getenv("MINIO_ACCESS_KEY_ID", "")
     minio_secret_key = os.getenv("MINIO_SECRET_ACCESS_KEY", "")
@@ -725,7 +746,7 @@ def _run_kubeflow_via_sparkapplication(
                 "--minio-bucket", raw_bucket,
                 "--minio-prefix", raw_prefix,
                 "--lakefs-repository", lakefs_repository,
-                "--lakefs-branch", per_run_branch,
+                "--lakefs-branch", lakefs_branch,
                 "--catalog-name", catalog_name,
                 "--staging-database", "stg_kronodroid",
                 "--marts-database", "kronodroid",
@@ -744,7 +765,7 @@ def _run_kubeflow_via_sparkapplication(
                     {"name": "MINIO_ENDPOINT_URL", "value": raw_endpoint},
                     {"name": "LAKEFS_ENDPOINT_URL", "value": lakefs_endpoint},
                     {"name": "LAKEFS_REPOSITORY", "value": lakefs_repository},
-                    {"name": "LAKEFS_BRANCH", "value": per_run_branch},
+                    {"name": "LAKEFS_BRANCH", "value": lakefs_branch},
                     {"name": "AWS_REGION", "value": os.getenv("MINIO_REGION", "us-east-1")},
                 ],
             },
@@ -760,7 +781,7 @@ def _run_kubeflow_via_sparkapplication(
                     {"name": "MINIO_ENDPOINT_URL", "value": raw_endpoint},
                     {"name": "LAKEFS_ENDPOINT_URL", "value": lakefs_endpoint},
                     {"name": "LAKEFS_REPOSITORY", "value": lakefs_repository},
-                    {"name": "LAKEFS_BRANCH", "value": per_run_branch},
+                    {"name": "LAKEFS_BRANCH", "value": lakefs_branch},
                     {"name": "AWS_REGION", "value": os.getenv("MINIO_REGION", "us-east-1")},
                 ],
             },
@@ -898,19 +919,17 @@ def _run_kubeflow_via_sparkapplication(
                 print(f"  SparkApplication state: {app_state} (elapsed: {int(elapsed)}s)")
 
                 if app_state == "COMPLETED":
-                    # Commit and merge the per-run branch
-                    merge_success = _commit_and_merge_lakefs(
-                        lakefs_api_endpoint, lakefs_repository, per_run_branch, lakefs_branch, run_id
+                    # Commit any uncommitted changes on the target branch
+                    commit_success = _commit_lakefs_changes(
+                        lakefs_api_endpoint, lakefs_repository, lakefs_branch, run_id
                     )
-                    if merge_success:
+                    if commit_success:
                         print("Kubeflow SparkOperator transformations completed successfully")
-                        return True
                     else:
-                        print("WARNING: LakeFS commit/merge failed, but Spark job succeeded")
-                        print(f"  Data is available on branch: {per_run_branch}")
-                        print(f"  You can manually merge with: lakectl merge lakefs://{lakefs_repository}/{per_run_branch} lakefs://{lakefs_repository}/{lakefs_branch}")
-                        # Still return True since Spark job succeeded - data is available on branch
-                        return True
+                        print("WARNING: LakeFS commit failed, but Spark job succeeded")
+                        print(f"  Data may still be uncommitted on branch: {lakefs_branch}")
+                    # Return True regardless - Spark job succeeded
+                    return True
 
                 elif app_state in ("FAILED", "SUBMISSION_FAILED", "FAILING"):
                     error_msg = status.get("applicationState", {}).get("errorMessage", "Unknown")
@@ -931,6 +950,84 @@ def _run_kubeflow_via_sparkapplication(
         print(f"ERROR: SparkApplication submission/monitoring failed: {e}")
         import traceback
         traceback.print_exc()
+        return False
+
+
+def _commit_lakefs_changes(
+    endpoint: str, repository: str, branch_name: str, run_id: str
+) -> bool:
+    """Commit any uncommitted changes on a LakeFS branch.
+
+    Args:
+        endpoint: LakeFS API endpoint
+        repository: LakeFS repository name
+        branch_name: Branch to commit changes on
+        run_id: Run identifier for commit message
+
+    Returns:
+        True if commit succeeded or no changes to commit, False on error.
+    """
+    import requests
+
+    access_key = os.getenv("LAKEFS_ACCESS_KEY_ID", "")
+    secret_key = os.getenv("LAKEFS_SECRET_ACCESS_KEY", "")
+
+    api_base = endpoint.rstrip("/")
+    auth = (access_key, secret_key)
+
+    print(f"  LakeFS Commit:")
+    print(f"    Branch: {branch_name}")
+
+    # Check for uncommitted changes
+    diff_url = f"{api_base}/api/v1/repositories/{repository}/branches/{_lakefs_quote_ref(branch_name)}/diff"
+    try:
+        diff_resp = requests.get(diff_url, auth=auth, timeout=30)
+    except requests.RequestException as e:
+        print(f"  ERROR: Failed to check diff: {e}")
+        return False
+
+    if diff_resp.status_code != 200:
+        print(f"  ERROR: Failed to get diff: {diff_resp.status_code}")
+        return False
+
+    diff_data = diff_resp.json()
+    changes = diff_data.get("results", [])
+    has_more = diff_data.get("pagination", {}).get("has_more", False)
+
+    if not changes:
+        print(f"    No uncommitted changes on branch '{branch_name}'")
+        return True
+
+    change_count = len(changes)
+    if has_more:
+        print(f"    Found {change_count}+ uncommitted changes")
+    else:
+        print(f"    Found {change_count} uncommitted changes")
+
+    # Commit changes
+    commit_url = f"{api_base}/api/v1/repositories/{repository}/branches/{_lakefs_quote_ref(branch_name)}/commits"
+    commit_data = {
+        "message": f"Kronodroid Iceberg transformation - run {run_id}",
+        "metadata": {
+            "pipeline": "kronodroid-iceberg",
+            "run_id": run_id,
+            "timestamp": datetime.now().isoformat(),
+        },
+    }
+
+    try:
+        commit_resp = requests.post(commit_url, json=commit_data, auth=auth, timeout=30)
+    except requests.RequestException as e:
+        print(f"  ERROR: Commit request failed: {e}")
+        return False
+
+    if commit_resp.status_code in (200, 201):
+        commit_id = commit_resp.json().get("id", "unknown")
+        print(f"    Committed: {commit_id}")
+        return True
+    else:
+        print(f"  ERROR: Commit failed: {commit_resp.status_code}")
+        print(f"    Response: {commit_resp.text[:500]}")
         return False
 
 
@@ -1226,18 +1323,21 @@ def run_kubeflow_training(
     feature_names = feature_names or DEFAULT_AUTOENCODER_FEATURES
     hidden_dims = hidden_dims or [128, 64]
 
-    # Rewrite localhost to cluster DNS if running in-cluster
+    # Rewrite URLs to FQDN for in-cluster access
+    # Note: Services are in 'dfp' namespace, training runs in 'kubeflow' namespace
+    # Short hostnames (e.g., 'mlflow') need FQDN for cross-namespace DNS resolution
+    services_namespace = "dfp"
     lakefs_cluster_endpoint = (
-        _k8s_service_url("lakefs", namespace, 8000) if _is_localhost_url(lakefs_endpoint) else lakefs_endpoint
+        _k8s_service_url("lakefs", services_namespace, 8000) if _needs_fqdn_rewrite(lakefs_endpoint) else lakefs_endpoint
     )
     minio_cluster_endpoint = (
-        _k8s_service_url("minio", namespace, 9000) if _is_localhost_url(minio_endpoint) else minio_endpoint
+        _k8s_service_url("minio", services_namespace, 9000) if _needs_fqdn_rewrite(minio_endpoint) else minio_endpoint
     )
     mlflow_cluster_uri = (
-        _k8s_service_url("mlflow", namespace, 5000) if _is_localhost_url(mlflow_tracking_uri) else mlflow_tracking_uri
+        _k8s_service_url("mlflow", services_namespace, 5000) if _needs_fqdn_rewrite(mlflow_tracking_uri) else mlflow_tracking_uri
     )
 
-    print(f"  MLflow URI: {mlflow_tracking_uri}")
+    print(f"  MLflow URI: {mlflow_cluster_uri}")
     print(f"  Experiment: {mlflow_experiment_name}")
     print(f"  Model name: {mlflow_model_name}")
     print(f"  LakeFS: {lakefs_repository}@{lakefs_ref}")
@@ -2261,8 +2361,8 @@ def main():
     # MLflow configuration
     parser.add_argument(
         "--mlflow-tracking-uri",
-        default="http://mlflow:5050",
-        help="MLflow tracking server URI (default: http://mlflow:5050)",
+        default="http://mlflow:5000",
+        help="MLflow tracking server URI (default: http://mlflow:5000)",
     )
     parser.add_argument(
         "--mlflow-experiment",

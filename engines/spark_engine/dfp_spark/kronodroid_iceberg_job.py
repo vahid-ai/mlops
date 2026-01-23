@@ -228,11 +228,87 @@ def create_dim_malware_families(stg_combined: DataFrame) -> DataFrame:
 def create_fct_training_dataset(fct_malware_samples: DataFrame) -> DataFrame:
     """Create fct_training_dataset fact table.
 
-    Mirrors dbt model: adds deterministic train/validation/test split.
+    Creates normalized syscall features for ML training:
+    - syscall_1_normalized through syscall_20_normalized: Top 20 syscall counts, min-max normalized
+    - syscall_total: Sum of all syscall counts
+    - syscall_mean: Mean of all syscall counts
+    - dataset_split: Deterministic train/validation/test split
     """
+    # Define the top 20 syscalls to use as features (common Linux syscalls in Android)
+    # These are typical syscalls monitored for malware detection
+    SYSCALL_COLUMNS = [
+        "_llseek", "accept4", "bind", "brk", "clone", "close", "connect",
+        "dup", "epoll_create1", "epoll_ctl", "epoll_pwait", "eventfd2",
+        "faccessat", "fchmod", "fchmodat", "fchown", "fchownat", "fcntl",
+        "fstat", "fstatfs",
+    ]
+
+    df = fct_malware_samples
+
+    # Get columns that actually exist in the dataframe
+    existing_syscall_cols = [c for c in SYSCALL_COLUMNS if c in df.columns]
+    print(f"  Found {len(existing_syscall_cols)} syscall columns for normalization")
+
+    # If we don't have enough syscall columns, try to find numeric columns that look like syscalls
+    if len(existing_syscall_cols) < 20:
+        # Get all numeric columns that could be syscalls (exclude known non-feature columns)
+        exclude_cols = {
+            "sample_id", "data_source", "_dbt_loaded_at", "_dlt_id", "_dlt_load_id",
+            "_ingestion_timestamp", "_source_file", "event_timestamp", "feature_timestamp",
+            "hash_value", "dataset_split",
+        }
+        numeric_cols = [
+            f.name for f in df.schema.fields
+            if f.dataType.simpleString() in ("bigint", "long", "int", "double", "float")
+            and f.name not in exclude_cols
+            and not f.name.startswith("syscall_")  # Don't include already-processed cols
+        ]
+        # Use first 20 numeric columns as syscall features
+        existing_syscall_cols = numeric_cols[:20]
+        print(f"  Using {len(existing_syscall_cols)} numeric columns as syscall features")
+
+    # Ensure we have at least some columns
+    if not existing_syscall_cols:
+        raise ValueError("No syscall/numeric columns found for feature engineering")
+
+    # Calculate syscall_total: sum of all syscall counts
+    syscall_sum_expr = sum(
+        F.coalesce(F.col(c).cast("double"), F.lit(0.0)) for c in existing_syscall_cols
+    )
+    df = df.withColumn("syscall_total", syscall_sum_expr)
+
+    # Calculate syscall_mean: average of all syscall counts
+    df = df.withColumn("syscall_mean", F.col("syscall_total") / len(existing_syscall_cols))
+
+    # Calculate min/max for each syscall column for normalization
+    # We'll use a window function to get global min/max
+    for i, col_name in enumerate(existing_syscall_cols, start=1):
+        # Min-max normalization: (value - min) / (max - min)
+        # Handle nulls and ensure the column exists
+        col_expr = F.coalesce(F.col(col_name).cast("double"), F.lit(0.0))
+
+        # For efficiency, we compute stats and normalize
+        # Get min and max values
+        stats = df.agg(
+            F.min(col_expr).alias("min_val"),
+            F.max(col_expr).alias("max_val")
+        ).collect()[0]
+
+        min_val = float(stats["min_val"]) if stats["min_val"] is not None else 0.0
+        max_val = float(stats["max_val"]) if stats["max_val"] is not None else 1.0
+        range_val = max_val - min_val if max_val != min_val else 1.0
+
+        # Apply min-max normalization
+        normalized_col = (col_expr - F.lit(min_val)) / F.lit(range_val)
+        df = df.withColumn(f"syscall_{i}_normalized", normalized_col)
+
+    # Pad with zeros if we have fewer than 20 syscall columns
+    for i in range(len(existing_syscall_cols) + 1, 21):
+        df = df.withColumn(f"syscall_{i}_normalized", F.lit(0.0))
+
     # Deterministic split based on hash(sample_id) % 100
     # ~70% train, ~15% validation, ~15% test
-    df = fct_malware_samples.withColumn(
+    df = df.withColumn(
         "hash_value", F.abs(F.hash(F.col("sample_id"))) % 100
     )
 
