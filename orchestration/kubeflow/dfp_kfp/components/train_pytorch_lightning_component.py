@@ -39,24 +39,15 @@ class TrainAutoencoderOutput(NamedTuple):
     test_samples: int
 
 
-# Default training image with pre-installed dependencies
-# Build with: docker build -t dfp-kfp-training:latest -f tools/docker/Dockerfile.kfp_training .
-# For Kind: kind load docker-image dfp-kfp-training:latest --name dfp-kind
+# Pre-built training image with all dependencies installed (fast startup)
+# Build with: task kfp-training-image
+# Falls back to runtime installs if image not available
 DEFAULT_TRAINING_IMAGE = "dfp-kfp-training:latest"
 
 
 @dsl.component(
-    # Use pre-built image with all dependencies installed
-    # This eliminates runtime pip installs for faster startup and better log visibility
-    # Falls back to base Spark image with runtime installs if custom image not available
+    # Using pre-built image with all dependencies - no runtime pip installs needed
     base_image=DEFAULT_TRAINING_IMAGE,
-    # No packages_to_install - all deps are pre-installed in the custom image
-    # If using apache/spark:3.5.0-python3, uncomment packages_to_install below:
-    # packages_to_install=[
-    #     "mlflow>=2.0", "torch>=2.0", "lightning>=2.0", "feast[redis]>=0.32",
-    #     "pyspark==3.5.0", "pandas>=2.0", "numpy>=1.24", "requests>=2.31",
-    #     "pyarrow>=14.0", "psutil>=5.9", "tensorboard>=2.10,<2.15",
-    # ],
 )
 def train_kronodroid_autoencoder_op(
     # MLflow config

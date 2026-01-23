@@ -1610,11 +1610,13 @@ def _run_training_via_kfp_client(
         # Wait for completion
         result = client.wait_for_run_completion(run.run_id, timeout=timeout_seconds)
 
-        if result.run.status == "Succeeded":
+        # KFP v2 returns V2beta1Run directly (not wrapped in .run)
+        status = result.state if hasattr(result, 'state') else result.status
+        if status in ("SUCCEEDED", "Succeeded"):
             print("Kubeflow autoencoder training completed successfully")
             return True
         else:
-            print(f"ERROR: KFP training run failed with status: {result.run.status}")
+            print(f"ERROR: KFP training run failed with status: {status}")
             return False
 
     except Exception as e:

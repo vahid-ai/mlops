@@ -83,6 +83,106 @@ Kaggle API → dlt → MinIO (raw) → dbt → MinIO (transformed) → Feast →
                   LakeFS (versioning)    LakeFS (versioning)
 ```
 
+## Kubeflow Pipelines
+
+Kubeflow Pipelines (KFP) uses **Argo Workflows** as its execution engine. Understanding this hierarchy helps with debugging and management.
+
+### Architecture
+
+```
+Kubeflow Pipeline Run
+    └── Argo Workflow (Custom Resource - the orchestrator)
+            ├── dag-driver pod (plans execution)
+            ├── container-driver pod (prepares component)
+            └── container-impl pod (runs your actual code)
+```
+
+When you submit a pipeline, KFP creates a **Workflow** CR. The Workflow Controller watches for these resources and manages pod lifecycle - if a pod is deleted, the controller recreates it.
+
+### Managing Pipelines
+
+**List running workflows:**
+```bash
+kubectl get workflows -n kubeflow
+# Or use Taskfile
+task kfp:workflows:list
+```
+
+**Delete a specific run (stops all its pods):**
+```bash
+kubectl delete workflow <workflow-name> -n kubeflow
+# Or use Taskfile
+task kfp:workflows:delete WORKFLOW=<workflow-name>
+```
+
+**Delete all workflows:**
+```bash
+kubectl delete workflows --all -n kubeflow
+# Or use Taskfile
+task kfp:workflows:delete ALL=1
+```
+
+**Clean up completed/failed pods:**
+```bash
+task kfp:cleanup        # Remove completed/failed pods
+task kfp:cleanup ALL=1  # Remove all pipeline pods
+```
+
+**View logs from a running pipeline:**
+```bash
+# Find the impl pod (runs your actual code)
+kubectl get pods -n kubeflow | grep impl
+
+# View logs (use -c main for the main container)
+kubectl logs -n kubeflow <pod-name> -c main -f
+```
+
+### KFP Training Image
+
+For faster pipeline startup (skip runtime pip installs), build the pre-configured training image with all dependencies pre-installed:
+
+```bash
+# Build and load into Kind (takes 10-15 minutes on first build)
+task kfp-training-image
+
+# Or separately
+task kfp-training-image:build  # Build the Docker image
+task kfp-training-image:load   # Load into Kind cluster
+```
+
+**Check build status:**
+```bash
+# Check if image exists locally
+docker images | grep dfp-kfp-training
+
+# Check if build is currently running
+docker ps | grep build
+
+# Check buildx builders
+docker buildx ls
+```
+
+**Build time:** The first build takes 10-15 minutes because it compiles `grpcio` from source (especially on ARM64). Subsequent builds are faster if Docker layers are cached.
+
+**Fallback behavior:** If the `dfp-kfp-training:latest` image doesn't exist, the pipeline automatically falls back to using `apache/spark:3.5.0-python3` with runtime pip installs. This works but adds 5-10 minutes to pipeline startup time.
+
+**After building:** Once the image is built and loaded, update `orchestration/kubeflow/dfp_kfp/components/train_pytorch_lightning_component.py` to use `base_image="dfp-kfp-training:latest"` and remove `packages_to_install` for faster startup.
+
+### Troubleshooting
+
+If pipelines fail with Gateway Timeout or pods are in CrashLoopBackOff:
+
+```bash
+# Check KFP pod status
+kubectl get pods -n kubeflow
+
+# Restart crashing pods (they'll be recreated by deployments)
+kubectl delete pod -n kubeflow <pod-name>
+
+# Check KFP API health
+curl http://localhost:8080/apis/v2beta1/healthz
+```
+
 ## Tests and CI
 - Tests live in `tests/` (unit, integration, e2e). Run with `pytest` after replacing placeholders.
 - GitHub Actions workflows in `ci/github/workflows` cover lint, build/test, and KFP compile; Tekton and Dagger stubs also provided.

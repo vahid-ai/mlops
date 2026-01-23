@@ -204,6 +204,9 @@ def kronodroid_autoencoder_training_pipeline(
         enable_resource_monitoring=enable_resource_monitoring,
     )
 
+    # Use local image from Kind - don't try to pull from registry
+    kubernetes.set_image_pull_policy(train_task, "IfNotPresent")
+
     # Inject LakeFS credentials from K8s secret
     kubernetes.use_secret_as_env(
         train_task,
@@ -366,6 +369,9 @@ def kronodroid_full_ml_pipeline(
         enable_gradient_logging=enable_gradient_logging,
         enable_resource_monitoring=enable_resource_monitoring,
     )
+
+    # Use local image from Kind - don't try to pull from registry
+    kubernetes.set_image_pull_policy(train_task, "IfNotPresent")
 
     # Configure credentials
     kubernetes.use_secret_as_env(
