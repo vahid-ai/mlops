@@ -38,8 +38,9 @@ from orchestration.kubeflow.dfp_kfp.components.lakefs_commit_merge_component imp
 
 
 # Default configuration values
-DEFAULT_MINIO_ENDPOINT = "http://minio:9000"
-DEFAULT_MINIO_BUCKET = "dlt-data"
+# Since all data goes through LakeFS S3 gateway, minio_* params point to LakeFS
+DEFAULT_MINIO_ENDPOINT = "http://lakefs:8000"
+DEFAULT_MINIO_BUCKET = "kronodroid"  # LakeFS repository name (accessed via S3 gateway)
 DEFAULT_MINIO_PREFIX = "kronodroid_raw"
 DEFAULT_LAKEFS_ENDPOINT = "http://lakefs:8000"
 DEFAULT_LAKEFS_REPOSITORY = "kronodroid"
@@ -47,7 +48,7 @@ DEFAULT_LAKEFS_BRANCH = "main"
 DEFAULT_SPARK_IMAGE = "apache/spark:3.5.0-python3"
 DEFAULT_NAMESPACE = "default"
 DEFAULT_SERVICE_ACCOUNT = "spark"
-DEFAULT_MINIO_SECRET = "minio-credentials"
+DEFAULT_MINIO_SECRET = "lakefs-credentials"  # Use LakeFS credentials for S3 gateway access
 DEFAULT_LAKEFS_SECRET = "lakefs-credentials"
 
 

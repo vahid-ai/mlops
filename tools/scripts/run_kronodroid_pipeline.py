@@ -470,8 +470,9 @@ def run_kubeflow_transformations(
     print("=" * 60)
 
     # Get configuration from environment if not provided
-    minio_endpoint = minio_endpoint or os.getenv("MINIO_ENDPOINT_URL", "http://minio:9000")
-    minio_bucket = minio_bucket or os.getenv("MINIO_BUCKET_NAME", "dlt-data")
+    # All data access goes through LakeFS S3 gateway, so default to LakeFS endpoint
+    minio_endpoint = minio_endpoint or os.getenv("LAKEFS_ENDPOINT_URL", "http://lakefs:8000")
+    minio_bucket = minio_bucket or os.getenv("LAKEFS_REPOSITORY", "kronodroid")
     lakefs_endpoint = lakefs_endpoint or os.getenv("LAKEFS_ENDPOINT_URL", "http://lakefs:8000")
     lakefs_repository = lakefs_repository or os.getenv("LAKEFS_REPOSITORY", "kronodroid")
 
@@ -479,23 +480,17 @@ def run_kubeflow_transformations(
     lakefs_api_endpoint = lakefs_endpoint
 
     # Spark runs inside the cluster, so rewrite URLs to FQDN for in-cluster DNS resolution.
-    minio_cluster_endpoint = (
-        _k8s_service_url("minio", namespace, 9000) if _needs_fqdn_rewrite(minio_endpoint) else minio_endpoint
-    )
+    # All data access goes through LakeFS S3 gateway
     lakefs_cluster_endpoint = (
         _k8s_service_url("lakefs", namespace, 8000) if _needs_fqdn_rewrite(lakefs_endpoint) else lakefs_endpoint
     )
+    # minio_cluster_endpoint now points to LakeFS since all access is via LakeFS S3 gateway
+    minio_cluster_endpoint = lakefs_cluster_endpoint
 
-    # For `--destination lakefs`, dlt writes raw data to the LakeFS S3 gateway bucket
-    # (the repository name), not the MinIO raw bucket. Use that as the Spark input.
-    if destination == "lakefs":
-        raw_bucket = lakefs_repository
-        raw_endpoint = lakefs_cluster_endpoint
-        raw_prefix = f"{lakefs_branch}/kronodroid_raw"
-    else:
-        raw_bucket = minio_bucket
-        raw_endpoint = minio_cluster_endpoint
-        raw_prefix = "kronodroid_raw"
+    # All raw data is accessed via LakeFS S3 gateway (the repository acts as the bucket)
+    raw_bucket = lakefs_repository
+    raw_endpoint = lakefs_cluster_endpoint
+    raw_prefix = f"{lakefs_branch}/kronodroid_raw"
 
     print(f"  MinIO endpoint (host): {minio_endpoint}")
     print(f"  MinIO endpoint (cluster): {minio_cluster_endpoint}")

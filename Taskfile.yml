@@ -35,9 +35,12 @@ tasks:
       - task: kind:down
 
   status:
-    desc: Show kind cluster and namespace status
+    desc: Show kind cluster and namespace status (dfp + kubeflow)
     cmds:
       - task: kind:status
+      - echo ""
+      - echo "=== Kubeflow Namespace ==="
+      - task: kubeflow:status
 
   logs:
     desc: Tail logs for a deployment (APP=minio|redis|lakefs|mlflow|lakefs-postgres)
@@ -62,6 +65,100 @@ tasks:
     desc: Show port-forward status
     cmds:
       - bash ./tools/scripts/kind_portforward.sh status
+
+  port-forward:reset:
+    desc: Reset port-forwards (clears stale pid files)
+    cmds:
+      - rm -rf ./.task/port-forwards
+      - bash ./tools/scripts/kind_portforward.sh start
+
+  endpoints:
+    desc: Show local endpoints (port-forward + NodePort)
+    cmds:
+      - |
+          echo "Port-forwarded (if running):"
+          echo "  lakefs  http://localhost:8000"
+          echo "  minio   http://localhost:19000"
+          echo "  console http://localhost:19001"
+          echo "  mlflow  http://localhost:5050"
+          echo "  redis   http://localhost:16379"
+          echo ""
+          echo "NodePorts (kind):"
+          echo "  lakefs  http://localhost:30080"
+          echo "  minio   http://localhost:30090"
+          echo "  console http://localhost:30091"
+          echo "  mlflow  http://localhost:30500"
+          echo "  redis   localhost:30379"
+
+  lakefs:rotate-keys:
+    desc: Generate LakeFS keys and overwrite .env
+    vars:
+      KFP_NAMESPACE: '{{.KFP_NAMESPACE | default "kubeflow"}}'
+      APPLY_K8S: '{{.APPLY_K8S | default "1"}}'
+      RESTART_LAKEFS: '{{.RESTART_LAKEFS | default "0"}}'
+    cmds:
+      - |
+          python3 - <<'PY'
+          import os
+          import secrets
+          import string
+          from pathlib import Path
+
+          env_path = Path(".env")
+          if env_path.exists():
+            content = env_path.read_text()
+          else:
+            content = ""
+
+          access = "".join(secrets.choice(string.ascii_uppercase + string.digits) for _ in range(20))
+          secret = "".join(secrets.choice(string.ascii_letters + string.digits) for _ in range(40))
+
+          def replace_or_append(text, key, value):
+            lines = text.splitlines()
+            updated = False
+            for i, line in enumerate(lines):
+              if line.startswith(f"{key}="):
+                lines[i] = f"{key}={value}"
+                updated = True
+                break
+            if not updated:
+              if lines and lines[-1].strip() != "":
+                lines.append("")
+              lines.append(f"{key}={value}")
+            return "\n".join(lines) + ("\n" if not text.endswith("\n") else "")
+
+          content = replace_or_append(content, "LAKEFS_ACCESS_KEY_ID", access)
+          content = replace_or_append(content, "LAKEFS_SECRET_ACCESS_KEY", secret)
+          env_path.write_text(content)
+          print("Updated .env with new LAKEFS keys.")
+          PY
+      - |
+          if [ "{{.APPLY_K8S}}" = "1" ]; then
+            set -a
+            # shellcheck disable=SC1091
+            source ./.env
+            set +a
+            for ns in "{{.NAMESPACE}}" "{{.KFP_NAMESPACE}}"; do
+              if kubectl get namespace "${ns}" >/dev/null 2>&1; then
+                echo "Updating lakefs-credentials in namespace ${ns}..."
+                kubectl -n "${ns}" create secret generic lakefs-credentials \
+                  --from-literal=access-key="${LAKEFS_ACCESS_KEY_ID}" \
+                  --from-literal=secret-key="${LAKEFS_SECRET_ACCESS_KEY}" \
+                  --from-literal=LAKEFS_ACCESS_KEY_ID="${LAKEFS_ACCESS_KEY_ID}" \
+                  --from-literal=LAKEFS_SECRET_ACCESS_KEY="${LAKEFS_SECRET_ACCESS_KEY}" \
+                  --dry-run=client -o yaml | kubectl apply -f -
+              else
+                echo "Namespace ${ns} not found; skipping secret update"
+              fi
+            done
+          else
+            echo "Skipping K8s secret update (APPLY_K8S={{.APPLY_K8S}})"
+          fi
+      - |
+          if [ "{{.RESTART_LAKEFS}}" = "1" ]; then
+            echo "Restarting lakefs deployment in {{.NAMESPACE}}..."
+            kubectl -n "{{.NAMESPACE}}" rollout restart deployment/lakefs || true
+          fi
 
   kind:up:
     desc: Bootstrap kind + apply kustomize overlay
@@ -216,6 +313,18 @@ tasks:
           echo "Waiting for KFP deployments to be ready..."
           kubectl -n "{{.KFP_NAMESPACE}}" rollout status deployment/ml-pipeline --timeout=300s || true
           kubectl -n "{{.KFP_NAMESPACE}}" rollout status deployment/ml-pipeline-ui --timeout=300s || true
+      - |
+          echo "Copying secrets from {{.NAMESPACE}} to {{.KFP_NAMESPACE}}..."
+          for secret_name in lakefs-credentials minio-credentials; do
+            if kubectl -n "{{.NAMESPACE}}" get secret "${secret_name}" >/dev/null 2>&1; then
+              kubectl -n "{{.NAMESPACE}}" get secret "${secret_name}" -o yaml \
+                | sed 's/namespace: {{.NAMESPACE}}/namespace: {{.KFP_NAMESPACE}}/' \
+                | kubectl apply -n "{{.KFP_NAMESPACE}}" -f -
+              echo "  Copied ${secret_name} to {{.KFP_NAMESPACE}}"
+            else
+              echo "  Warning: ${secret_name} not found in {{.NAMESPACE}}, skipping"
+            fi
+          done
       - echo "Kubeflow Pipelines installed successfully in namespace {{.KFP_NAMESPACE}}"
       - 'echo "Access the UI via: kubectl port-forward -n {{.KFP_NAMESPACE}} svc/ml-pipeline-ui 8080:80"'
 
@@ -368,3 +477,46 @@ tasks:
             echo "Deleting workflow {{.WORKFLOW}}..."
             kubectl -n "{{.KFP_NAMESPACE}}" delete workflow "{{.WORKFLOW}}"
           fi
+
+  cleanup:memory:
+    desc: Clear lakefs/minio data and delete KFP/Spark leftovers
+    vars:
+      KFP_NAMESPACE: '{{.KFP_NAMESPACE | default "kubeflow"}}'
+      RESTART_PORT_FORWARD: '{{.RESTART_PORT_FORWARD | default "1"}}'
+    cmds:
+      - |
+          echo "Deleting SparkApplications in {{.NAMESPACE}}..."
+          kubectl -n "{{.NAMESPACE}}" delete sparkapplications --all 2>/dev/null || true
+      - |
+          if kubectl get namespace "{{.KFP_NAMESPACE}}" >/dev/null 2>&1; then
+            echo "Deleting KFP workflows and pipeline pods in {{.KFP_NAMESPACE}}..."
+            kubectl -n "{{.KFP_NAMESPACE}}" delete workflows --all 2>/dev/null || true
+            kubectl -n "{{.KFP_NAMESPACE}}" delete pods -l 'workflows.argoproj.io/workflow' 2>/dev/null || true
+            kubectl -n "{{.KFP_NAMESPACE}}" delete jobs --field-selector=status.successful=1 2>/dev/null || true
+          else
+            echo "KFP namespace '{{.KFP_NAMESPACE}}' not found; skipping KFP cleanup"
+          fi
+      - |
+          echo "Deleting completed/failed pods and jobs in {{.NAMESPACE}}..."
+          kubectl -n "{{.NAMESPACE}}" delete pods --field-selector=status.phase=Succeeded 2>/dev/null || true
+          kubectl -n "{{.NAMESPACE}}" delete pods --field-selector=status.phase=Failed 2>/dev/null || true
+          kubectl -n "{{.NAMESPACE}}" delete jobs --field-selector=status.successful=1 2>/dev/null || true
+      - |
+          echo "Restarting lakefs/minio/lakefs-postgres pods to clear emptyDir data..."
+          kubectl -n "{{.NAMESPACE}}" delete pod -l app=minio 2>/dev/null || true
+          kubectl -n "{{.NAMESPACE}}" delete pod -l app=lakefs 2>/dev/null || true
+          kubectl -n "{{.NAMESPACE}}" delete pod -l app=lakefs-postgres 2>/dev/null || true
+      - |
+          echo "Waiting for lakefs/minio to become ready..."
+          kubectl -n "{{.NAMESPACE}}" rollout status deployment/minio --timeout=120s || true
+          kubectl -n "{{.NAMESPACE}}" rollout status deployment/lakefs --timeout=120s || true
+          kubectl -n "{{.NAMESPACE}}" rollout status deployment/lakefs-postgres --timeout=120s || true
+      - |
+          if [ "{{.RESTART_PORT_FORWARD}}" = "1" ]; then
+            echo "Restarting port-forwards..."
+            bash ./tools/scripts/kind_portforward.sh stop || true
+            bash ./tools/scripts/kind_portforward.sh start || true
+          else
+            echo "Skipping port-forward restart (RESTART_PORT_FORWARD={{.RESTART_PORT_FORWARD}})"
+          fi
+      - echo "Cleanup complete."

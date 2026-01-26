@@ -623,7 +623,7 @@ spec:
 def run_spark_kronodroid_iceberg(
     run_id: str | None = None,
     minio_endpoint: str | None = None,
-    minio_bucket: str = "dlt-data",
+    minio_bucket: str = "kronodroid",  # LakeFS repository name (accessed via S3 gateway)
     minio_prefix: str = "kronodroid_raw",
     lakefs_endpoint: str | None = None,
     lakefs_repository: str = "kronodroid",
@@ -631,7 +631,7 @@ def run_spark_kronodroid_iceberg(
     spark_image: str = "apache/spark:3.5.0-python3",
     namespace: str = "default",
     service_account: str = "spark",
-    minio_secret_name: str = "minio-credentials",
+    minio_secret_name: str = "lakefs-credentials",  # Use LakeFS credentials for S3 gateway
     lakefs_secret_name: str = "lakefs-credentials",
     staging_database: str = "stg_kronodroid",
     marts_database: str = "kronodroid",

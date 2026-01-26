@@ -42,6 +42,30 @@ if ! kind get clusters | grep -q "^${CLUSTER_NAME}$"; then
   kind create cluster --name "${CLUSTER_NAME}" --config "${KIND_CONFIG}"
 fi
 
+# Ensure namespace exists before creating secrets
+kubectl create namespace "${NAMESPACE}" --dry-run=client -o yaml | kubectl apply -f -
+
+# Create lakefs-credentials secret from .env file (required before applying manifests)
+ENV_FILE="${ROOT_DIR}/.env"
+if [ -f "${ENV_FILE}" ]; then
+  # shellcheck disable=SC1090
+  source "${ENV_FILE}"
+  if [ -n "${LAKEFS_ACCESS_KEY_ID:-}" ] && [ -n "${LAKEFS_SECRET_ACCESS_KEY:-}" ]; then
+    echo "Creating lakefs-credentials secret in namespace ${NAMESPACE}..."
+    kubectl -n "${NAMESPACE}" create secret generic lakefs-credentials \
+      --from-literal=access-key="${LAKEFS_ACCESS_KEY_ID}" \
+      --from-literal=secret-key="${LAKEFS_SECRET_ACCESS_KEY}" \
+      --from-literal=LAKEFS_ACCESS_KEY_ID="${LAKEFS_ACCESS_KEY_ID}" \
+      --from-literal=LAKEFS_SECRET_ACCESS_KEY="${LAKEFS_SECRET_ACCESS_KEY}" \
+      --dry-run=client -o yaml | kubectl apply -f -
+  else
+    echo "Warning: LAKEFS_ACCESS_KEY_ID or LAKEFS_SECRET_ACCESS_KEY not found in ${ENV_FILE}" >&2
+    echo "Run 'task lakefs:rotate-keys' to generate keys" >&2
+  fi
+else
+  echo "Warning: ${ENV_FILE} not found. Run 'task lakefs:rotate-keys' to generate keys" >&2
+fi
+
 kubectl apply -k "${KUSTOMIZE_DIR}"
 
 kubectl -n "${NAMESPACE}" rollout status deployment/minio --timeout=180s

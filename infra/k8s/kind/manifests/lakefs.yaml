@@ -25,6 +25,18 @@ spec:
               value: postgres://lakefs:lakefs@lakefs-postgres.dfp.svc.cluster.local:5432/lakefs?sslmode=disable
             - name: LAKEFS_AUTH_ENCRYPT_SECRET_KEY
               value: 0123456789abcdef0123456789abcdef
+            - name: LAKEFS_INSTALLATION_USER_NAME
+              value: admin
+            - name: LAKEFS_INSTALLATION_ACCESS_KEY_ID
+              valueFrom:
+                secretKeyRef:
+                  name: lakefs-credentials
+                  key: LAKEFS_ACCESS_KEY_ID
+            - name: LAKEFS_INSTALLATION_SECRET_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: lakefs-credentials
+                  key: LAKEFS_SECRET_ACCESS_KEY
             - name: LAKEFS_BLOCKSTORE_TYPE
               value: s3
             - name: LAKEFS_BLOCKSTORE_S3_REGION
