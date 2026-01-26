@@ -26,7 +26,7 @@ Usage:
 import uuid
 from typing import NamedTuple
 
-from kfp import dsl
+from kfp import dsl, kubernetes
 from kfp.dsl import PipelineTask
 
 from orchestration.kubeflow.dfp_kfp.components.spark_kronodroid_iceberg_component import (
@@ -144,24 +144,31 @@ def kronodroid_iceberg_pipeline(
         timeout_seconds=spark_timeout_seconds,
     )
 
-    # Configure the task to use LakeFS secret for branch creation
-    spark_task.set_env_variable(
-        name="LAKEFS_ACCESS_KEY_ID",
-        value_from_secret=dsl.V1EnvVarSource(
-            secret_key_ref=dsl.V1SecretKeySelector(
-                name=lakefs_secret_name,
-                key="access-key",
-            )
-        ),
+    # Set container resources to prevent OOMKilled during pip install
+    spark_task.set_memory_request("512Mi")
+    spark_task.set_memory_limit("1Gi")
+    spark_task.set_cpu_request("200m")
+    spark_task.set_cpu_limit("1")
+
+    # Configure the task to use LakeFS secret for branch creation (KFP v2 API)
+    # Note: secret keys match the actual keys in lakefs-credentials secret
+    kubernetes.use_secret_as_env(
+        task=spark_task,
+        secret_name=lakefs_secret_name,
+        secret_key_to_env={
+            "LAKEFS_ACCESS_KEY_ID": "LAKEFS_ACCESS_KEY_ID",
+            "LAKEFS_SECRET_ACCESS_KEY": "LAKEFS_SECRET_ACCESS_KEY",
+        },
     )
-    spark_task.set_env_variable(
-        name="LAKEFS_SECRET_ACCESS_KEY",
-        value_from_secret=dsl.V1EnvVarSource(
-            secret_key_ref=dsl.V1SecretKeySelector(
-                name=lakefs_secret_name,
-                key="secret-key",
-            )
-        ),
+
+    # Configure MinIO credentials for Spark task (needed for per-bucket S3A config)
+    kubernetes.use_secret_as_env(
+        task=spark_task,
+        secret_name=minio_secret_name,
+        secret_key_to_env={
+            "MINIO_ACCESS_KEY_ID": "MINIO_ACCESS_KEY_ID",
+            "MINIO_SECRET_ACCESS_KEY": "MINIO_SECRET_ACCESS_KEY",
+        },
     )
 
     # Step 2: Commit and merge LakeFS branch
@@ -179,24 +186,21 @@ def kronodroid_iceberg_pipeline(
     # Set dependency
     commit_merge_task.after(spark_task)
 
-    # Configure LakeFS credentials
-    commit_merge_task.set_env_variable(
-        name="LAKEFS_ACCESS_KEY_ID",
-        value_from_secret=dsl.V1EnvVarSource(
-            secret_key_ref=dsl.V1SecretKeySelector(
-                name=lakefs_secret_name,
-                key="access-key",
-            )
-        ),
-    )
-    commit_merge_task.set_env_variable(
-        name="LAKEFS_SECRET_ACCESS_KEY",
-        value_from_secret=dsl.V1EnvVarSource(
-            secret_key_ref=dsl.V1SecretKeySelector(
-                name=lakefs_secret_name,
-                key="secret-key",
-            )
-        ),
+    # Set container resources to prevent OOMKilled during pip install
+    commit_merge_task.set_memory_request("256Mi")
+    commit_merge_task.set_memory_limit("512Mi")
+    commit_merge_task.set_cpu_request("100m")
+    commit_merge_task.set_cpu_limit("500m")
+
+    # Configure LakeFS credentials (KFP v2 API)
+    # Note: secret keys match the actual keys in lakefs-credentials secret
+    kubernetes.use_secret_as_env(
+        task=commit_merge_task,
+        secret_name=lakefs_secret_name,
+        secret_key_to_env={
+            "LAKEFS_ACCESS_KEY_ID": "LAKEFS_ACCESS_KEY_ID",
+            "LAKEFS_SECRET_ACCESS_KEY": "LAKEFS_SECRET_ACCESS_KEY",
+        },
     )
 
     # Step 3: (Optional) Feast apply - would plug into existing component
@@ -308,24 +312,31 @@ def kronodroid_full_pipeline(
         timeout_seconds=spark_timeout_seconds,
     )
 
-    # Configure LakeFS credentials for Spark task
-    spark_task.set_env_variable(
-        name="LAKEFS_ACCESS_KEY_ID",
-        value_from_secret=dsl.V1EnvVarSource(
-            secret_key_ref=dsl.V1SecretKeySelector(
-                name=lakefs_secret_name,
-                key="access-key",
-            )
-        ),
+    # Set container resources to prevent OOMKilled during pip install
+    spark_task.set_memory_request("512Mi")
+    spark_task.set_memory_limit("1Gi")
+    spark_task.set_cpu_request("200m")
+    spark_task.set_cpu_limit("1")
+
+    # Configure LakeFS credentials for Spark task (KFP v2 API)
+    # Note: secret keys match the actual keys in lakefs-credentials secret
+    kubernetes.use_secret_as_env(
+        task=spark_task,
+        secret_name=lakefs_secret_name,
+        secret_key_to_env={
+            "LAKEFS_ACCESS_KEY_ID": "LAKEFS_ACCESS_KEY_ID",
+            "LAKEFS_SECRET_ACCESS_KEY": "LAKEFS_SECRET_ACCESS_KEY",
+        },
     )
-    spark_task.set_env_variable(
-        name="LAKEFS_SECRET_ACCESS_KEY",
-        value_from_secret=dsl.V1EnvVarSource(
-            secret_key_ref=dsl.V1SecretKeySelector(
-                name=lakefs_secret_name,
-                key="secret-key",
-            )
-        ),
+
+    # Configure MinIO credentials for Spark task (needed for per-bucket S3A config)
+    kubernetes.use_secret_as_env(
+        task=spark_task,
+        secret_name=minio_secret_name,
+        secret_key_to_env={
+            "MINIO_ACCESS_KEY_ID": "MINIO_ACCESS_KEY_ID",
+            "MINIO_SECRET_ACCESS_KEY": "MINIO_SECRET_ACCESS_KEY",
+        },
     )
 
     # Step 3: LakeFS commit + merge
@@ -341,23 +352,21 @@ def kronodroid_full_pipeline(
     )
     commit_merge_task.after(spark_task)
 
-    commit_merge_task.set_env_variable(
-        name="LAKEFS_ACCESS_KEY_ID",
-        value_from_secret=dsl.V1EnvVarSource(
-            secret_key_ref=dsl.V1SecretKeySelector(
-                name=lakefs_secret_name,
-                key="access-key",
-            )
-        ),
-    )
-    commit_merge_task.set_env_variable(
-        name="LAKEFS_SECRET_ACCESS_KEY",
-        value_from_secret=dsl.V1EnvVarSource(
-            secret_key_ref=dsl.V1SecretKeySelector(
-                name=lakefs_secret_name,
-                key="secret-key",
-            )
-        ),
+    # Set container resources to prevent OOMKilled during pip install
+    commit_merge_task.set_memory_request("256Mi")
+    commit_merge_task.set_memory_limit("512Mi")
+    commit_merge_task.set_cpu_request("100m")
+    commit_merge_task.set_cpu_limit("500m")
+
+    # Configure LakeFS credentials for commit/merge task (KFP v2 API)
+    # Note: secret keys match the actual keys in lakefs-credentials secret
+    kubernetes.use_secret_as_env(
+        task=commit_merge_task,
+        secret_name=lakefs_secret_name,
+        secret_key_to_env={
+            "LAKEFS_ACCESS_KEY_ID": "LAKEFS_ACCESS_KEY_ID",
+            "LAKEFS_SECRET_ACCESS_KEY": "LAKEFS_SECRET_ACCESS_KEY",
+        },
     )
 
     # Step 4: Feast apply (optional) - plug into existing stubs

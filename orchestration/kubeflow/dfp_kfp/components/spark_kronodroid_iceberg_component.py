@@ -1,7 +1,7 @@
 """Component: Spark Kronodroid Iceberg transformation via SparkOperator.
 
 This KFP component:
-1. Creates a per-run LakeFS branch (spark/<run_id>)
+1. Creates a per-run LakeFS branch (spark-<run_id>)
 2. Submits a SparkApplication CRD to run the kronodroid_iceberg_job
 3. Monitors the SparkApplication until completion
 
@@ -30,8 +30,8 @@ spec:
   pythonVersion: "3"
   mode: cluster
   image: {spark_image}
-  imagePullPolicy: Always
-  mainApplicationFile: local:///opt/spark/jobs/kronodroid_iceberg_job.py
+  imagePullPolicy: IfNotPresent
+  mainApplicationFile: local:///opt/spark/work-dir/kronodroid_iceberg_job.py
   arguments:
     - "--minio-bucket"
     - "{minio_bucket}"
@@ -118,24 +118,36 @@ spec:
         value: "{lakefs_branch}"
   deps:
     packages:
+      # iceberg-spark-runtime includes avro support - no separate iceberg-avro package exists
       - org.apache.iceberg:iceberg-spark-runtime-3.5_2.12:1.5.2
-      - org.apache.iceberg:iceberg-aws:1.5.2
-      - org.apache.iceberg:iceberg-avro:1.5.2
+      # LakeFS Iceberg catalog for open-source lakeFS (HadoopCatalog approach)
+      - io.lakefs:lakefs-iceberg:0.1.4
       - org.apache.hadoop:hadoop-aws:3.3.4
       - com.amazonaws:aws-java-sdk-bundle:1.12.262
   sparkConf:
+    # Use /tmp for Ivy cache (writable in container)
+    spark.jars.ivy: /tmp/.ivy2
     spark.sql.extensions: org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions
     spark.sql.iceberg.write.format.default: avro
     spark.sql.iceberg.write.avro.compression-codec: snappy
+    # Use LakeFSCatalog (HadoopCatalog) - REST Catalog requires lakeFS Enterprise
     spark.sql.catalog.lakefs: org.apache.iceberg.spark.SparkCatalog
-    spark.sql.catalog.lakefs.catalog-impl: org.apache.iceberg.rest.RESTCatalog
-    spark.sql.catalog.lakefs.uri: "{lakefs_iceberg_rest_uri}"
-    spark.sql.catalog.lakefs.warehouse: "s3a://{lakefs_repository}/{lakefs_branch}/iceberg"
+    spark.sql.catalog.lakefs.catalog-impl: io.lakefs.iceberg.LakeFSCatalog
+    spark.sql.catalog.lakefs.warehouse: "lakefs://{lakefs_repository}"
+    spark.sql.catalog.lakefs.cache-enabled: "false"
+    # S3A filesystem config - lakeFS acts as S3 gateway
+    spark.hadoop.fs.s3.impl: org.apache.hadoop.fs.s3a.S3AFileSystem
     spark.hadoop.fs.s3a.impl: org.apache.hadoop.fs.s3a.S3AFileSystem
     spark.hadoop.fs.s3a.path.style.access: "true"
     spark.hadoop.fs.s3a.connection.ssl.enabled: "false"
+    # Per-bucket endpoints and credentials for MinIO (dlt-data bucket)
     spark.hadoop.fs.s3a.bucket.{minio_bucket}.endpoint: "{minio_endpoint}"
+    spark.hadoop.fs.s3a.bucket.{minio_bucket}.access.key: "{minio_access_key}"
+    spark.hadoop.fs.s3a.bucket.{minio_bucket}.secret.key: "{minio_secret_key}"
+    # Per-bucket endpoints and credentials for LakeFS (kronodroid bucket)
     spark.hadoop.fs.s3a.bucket.{lakefs_repository}.endpoint: "{lakefs_endpoint}"
+    spark.hadoop.fs.s3a.bucket.{lakefs_repository}.access.key: "{lakefs_access_key}"
+    spark.hadoop.fs.s3a.bucket.{lakefs_repository}.secret.key: "{lakefs_secret_key}"
 """
 
 
@@ -393,8 +405,8 @@ def spark_kronodroid_iceberg_op(
     import yaml
     from kubernetes import client, config
 
-    # Generate per-run branch name
-    lakefs_branch = f"spark/{run_id}"
+    # Generate per-run branch name (LakeFS doesn't allow slashes in branch names)
+    lakefs_branch = f"spark-{run_id}"
     app_name = f"kronodroid-iceberg-{run_id[:8]}"
 
     print(f"Starting Spark Kronodroid Iceberg job")
@@ -402,9 +414,11 @@ def spark_kronodroid_iceberg_op(
     print(f"  LakeFS branch: {lakefs_branch}")
     print(f"  App name: {app_name}")
 
-    # Load LakeFS credentials from environment (injected by K8s secret)
+    # Load credentials from environment (injected by K8s secret via kubernetes.use_secret_as_env)
     lakefs_access_key = os.environ.get("LAKEFS_ACCESS_KEY_ID", "")
     lakefs_secret_key = os.environ.get("LAKEFS_SECRET_ACCESS_KEY", "")
+    minio_access_key = os.environ.get("MINIO_ACCESS_KEY_ID", "")
+    minio_secret_key = os.environ.get("MINIO_SECRET_ACCESS_KEY", "")
 
     # Create per-run LakeFS branch
     api_base = lakefs_endpoint.rstrip("/")
@@ -437,8 +451,8 @@ spec:
   pythonVersion: "3"
   mode: cluster
   image: {spark_image}
-  imagePullPolicy: Always
-  mainApplicationFile: local:///opt/spark/jobs/kronodroid_iceberg_job.py
+  imagePullPolicy: IfNotPresent
+  mainApplicationFile: local:///opt/spark/work-dir/kronodroid_iceberg_job.py
   arguments:
     - "--minio-bucket"
     - "{minio_bucket}"
@@ -495,24 +509,36 @@ spec:
         value: "{lakefs_branch}"
   deps:
     packages:
+      # iceberg-spark-runtime includes avro support - no separate iceberg-avro package exists
       - org.apache.iceberg:iceberg-spark-runtime-3.5_2.12:1.5.2
-      - org.apache.iceberg:iceberg-aws:1.5.2
-      - org.apache.iceberg:iceberg-avro:1.5.2
+      # LakeFS Iceberg catalog for open-source lakeFS (HadoopCatalog approach)
+      - io.lakefs:lakefs-iceberg:0.1.4
       - org.apache.hadoop:hadoop-aws:3.3.4
       - com.amazonaws:aws-java-sdk-bundle:1.12.262
   sparkConf:
+    # Use /tmp for Ivy cache (writable in container)
+    spark.jars.ivy: /tmp/.ivy2
     spark.sql.extensions: org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions
     spark.sql.iceberg.write.format.default: avro
     spark.sql.iceberg.write.avro.compression-codec: snappy
+    # Use LakeFSCatalog (HadoopCatalog) - REST Catalog requires lakeFS Enterprise
     spark.sql.catalog.{catalog_name}: org.apache.iceberg.spark.SparkCatalog
-    spark.sql.catalog.{catalog_name}.catalog-impl: org.apache.iceberg.rest.RESTCatalog
-    spark.sql.catalog.{catalog_name}.uri: "{iceberg_rest_uri}"
-    spark.sql.catalog.{catalog_name}.warehouse: "s3a://{lakefs_repository}/{lakefs_branch}/iceberg"
+    spark.sql.catalog.{catalog_name}.catalog-impl: io.lakefs.iceberg.LakeFSCatalog
+    spark.sql.catalog.{catalog_name}.warehouse: "lakefs://{lakefs_repository}"
+    spark.sql.catalog.{catalog_name}.cache-enabled: "false"
+    # S3A filesystem config - lakeFS acts as S3 gateway
+    spark.hadoop.fs.s3.impl: org.apache.hadoop.fs.s3a.S3AFileSystem
     spark.hadoop.fs.s3a.impl: org.apache.hadoop.fs.s3a.S3AFileSystem
     spark.hadoop.fs.s3a.path.style.access: "true"
     spark.hadoop.fs.s3a.connection.ssl.enabled: "false"
+    # Per-bucket endpoints and credentials for MinIO (dlt-data bucket)
     spark.hadoop.fs.s3a.bucket.{minio_bucket}.endpoint: "{minio_endpoint}"
+    spark.hadoop.fs.s3a.bucket.{minio_bucket}.access.key: "{minio_access_key}"
+    spark.hadoop.fs.s3a.bucket.{minio_bucket}.secret.key: "{minio_secret_key}"
+    # Per-bucket endpoints and credentials for LakeFS (kronodroid bucket)
     spark.hadoop.fs.s3a.bucket.{lakefs_repository}.endpoint: "{lakefs_endpoint}"
+    spark.hadoop.fs.s3a.bucket.{lakefs_repository}.access.key: "{lakefs_access_key}"
+    spark.hadoop.fs.s3a.bucket.{lakefs_repository}.secret.key: "{lakefs_secret_key}"
 """
 
     # Load Kubernetes config
@@ -629,8 +655,8 @@ def run_spark_kronodroid_iceberg(
         lakefs_endpoint = os.getenv("LAKEFS_ENDPOINT_URL", "http://lakefs:8000")
 
     # This would need the actual implementation
-    # For now, just return a placeholder
-    lakefs_branch = f"spark/{run_id}"
+    # For now, just return a placeholder (LakeFS doesn't allow slashes in branch names)
+    lakefs_branch = f"spark-{run_id}"
     app_name = f"kronodroid-iceberg-{run_id[:8]}"
 
     return SparkJobOutput(

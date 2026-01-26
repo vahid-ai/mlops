@@ -46,7 +46,7 @@ def lakefs_commit_merge_op(
     Args:
         lakefs_endpoint: LakeFS API endpoint URL
         lakefs_repository: LakeFS repository name
-        source_branch: Branch to commit and merge (e.g., spark/<run_id>)
+        source_branch: Branch to commit and merge (e.g., spark-<run_id>)
         target_branch: Target branch to merge into (e.g., main)
         commit_message: Message for the commit
         run_id: Pipeline run ID (for metadata)
@@ -239,7 +239,7 @@ def lakefs_commit_only_op(
 def commit_and_merge_lakefs_branch(
     lakefs_endpoint: str | None = None,
     lakefs_repository: str = "kronodroid",
-    source_branch: str = "spark/test",
+    source_branch: str = "spark-test",  # LakeFS doesn't allow slashes in branch names
     target_branch: str = "main",
     commit_message: str = "Spark Iceberg transformation",
     run_id: str = "test-run",

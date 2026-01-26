@@ -326,6 +326,7 @@ def create_fct_training_dataset(fct_malware_samples: DataFrame) -> DataFrame:
 def write_iceberg_table(
     df: DataFrame,
     catalog: str,
+    branch: str,
     database: str,
     table: str,
     mode: str = "overwrite",
@@ -335,11 +336,14 @@ def write_iceberg_table(
     Args:
         df: DataFrame to write
         catalog: Iceberg catalog name
+        branch: LakeFS branch name (required for LakeFSCatalog)
         database: Database/namespace name
         table: Table name
         mode: Write mode (overwrite, append)
     """
-    full_table_name = f"{catalog}.{database}.{table}"
+    # LakeFSCatalog uses format: catalog.branch.database.table
+    # Use backticks for branch name to handle special chars like hyphens
+    full_table_name = f"{catalog}.`{branch}`.{database}.{table}"
     print(f"Writing Iceberg table: {full_table_name}")
 
     # Write with Avro format (matches repo defaults; enables consistent file type across jobs)
@@ -352,16 +356,19 @@ def write_iceberg_table(
     print(f"Successfully wrote {df.count()} rows to {full_table_name}")
 
 
-def ensure_databases(spark: SparkSession, catalog: str, databases: List[str]) -> None:
+def ensure_databases(spark: SparkSession, catalog: str, branch: str, databases: List[str]) -> None:
     """Ensure Iceberg databases exist.
 
     Args:
         spark: SparkSession instance
         catalog: Catalog name
+        branch: LakeFS branch name (required for LakeFSCatalog)
         databases: List of database names to create
     """
     for db in databases:
-        full_db = f"{catalog}.{db}"
+        # LakeFSCatalog uses format: catalog.branch.database
+        # Use backticks for branch name to handle special chars like hyphens
+        full_db = f"{catalog}.`{branch}`.{db}"
         print(f"Creating database if not exists: {full_db}")
         spark.sql(f"CREATE DATABASE IF NOT EXISTS {full_db}")
 
@@ -392,6 +399,7 @@ def main() -> int:
         ensure_databases(
             spark,
             args.catalog_name,
+            args.lakefs_branch,
             [args.staging_database, args.marts_database],
         )
 
@@ -417,6 +425,7 @@ def main() -> int:
         write_iceberg_table(
             stg_emulator,
             args.catalog_name,
+            args.lakefs_branch,
             args.staging_database,
             "stg_kronodroid__emulator",
         )
@@ -426,6 +435,7 @@ def main() -> int:
         write_iceberg_table(
             stg_real_device,
             args.catalog_name,
+            args.lakefs_branch,
             args.staging_database,
             "stg_kronodroid__real_device",
         )
@@ -435,6 +445,7 @@ def main() -> int:
         write_iceberg_table(
             stg_combined,
             args.catalog_name,
+            args.lakefs_branch,
             args.staging_database,
             "stg_kronodroid__combined",
         )
@@ -445,6 +456,7 @@ def main() -> int:
         write_iceberg_table(
             fct_samples,
             args.catalog_name,
+            args.lakefs_branch,
             args.marts_database,
             "fct_malware_samples",
         )
@@ -454,6 +466,7 @@ def main() -> int:
         write_iceberg_table(
             dim_families,
             args.catalog_name,
+            args.lakefs_branch,
             args.marts_database,
             "dim_malware_families",
         )
@@ -463,6 +476,7 @@ def main() -> int:
         write_iceberg_table(
             fct_training,
             args.catalog_name,
+            args.lakefs_branch,
             args.marts_database,
             "fct_training_dataset",
         )
