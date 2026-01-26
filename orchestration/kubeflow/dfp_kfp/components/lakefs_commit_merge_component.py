@@ -116,7 +116,33 @@ def lakefs_commit_merge_op(
         commit_id = commit_result.get("id", "unknown")
         print(f"Committed: {commit_id}")
 
-    # Step 3: Merge into target branch
+    # Step 3: Check and commit target branch if it has uncommitted changes
+    # This prevents "uncommitted changes (dirty branch)" error during merge
+    target_diff_url = f"{api_base}/api/v1/repositories/{lakefs_repository}/branches/{target_branch}/diff"
+    target_diff_resp = requests.get(target_diff_url, auth=auth)
+
+    if target_diff_resp.status_code == 200:
+        target_changes = target_diff_resp.json().get("results", [])
+        if target_changes:
+            print(f"Target branch '{target_branch}' has {len(target_changes)} uncommitted changes, committing first...")
+            target_commit_url = f"{api_base}/api/v1/repositories/{lakefs_repository}/branches/{target_branch}/commits"
+            target_commit_data = {
+                "message": f"Auto-commit before merge from {source_branch}",
+                "metadata": {
+                    "pipeline": pipeline_name,
+                    "run_id": run_id,
+                    "timestamp": datetime.utcnow().isoformat(),
+                    "auto_commit": "true",
+                },
+            }
+            target_commit_resp = requests.post(target_commit_url, json=target_commit_data, auth=auth)
+            if target_commit_resp.status_code in (200, 201):
+                target_commit_id = target_commit_resp.json().get("id", "unknown")
+                print(f"Committed target branch: {target_commit_id}")
+            else:
+                print(f"Warning: Failed to commit target branch: {target_commit_resp.text}")
+
+    # Step 4: Merge into target branch
     merge_url = f"{api_base}/api/v1/repositories/{lakefs_repository}/refs/{source_branch}/merge/{target_branch}"
     merge_data = {
         "message": f"Merge {source_branch} into {target_branch}",
@@ -141,7 +167,7 @@ def lakefs_commit_merge_op(
         merge_commit_id = merge_result.get("reference", "unknown")
         print(f"Merged: {merge_commit_id}")
 
-    # Step 4: Optionally delete source branch
+    # Step 5: Optionally delete source branch
     if delete_source_branch and source_branch != target_branch:
         delete_url = f"{api_base}/api/v1/repositories/{lakefs_repository}/branches/{source_branch}"
         delete_resp = requests.delete(delete_url, auth=auth)
