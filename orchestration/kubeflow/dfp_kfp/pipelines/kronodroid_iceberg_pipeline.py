@@ -82,7 +82,9 @@ def kronodroid_iceberg_pipeline(
     marts_database: str = "kronodroid",
     catalog_name: str = "lakefs",
     # Pipeline options
-    delete_source_branch: bool = True,
+    # Note: Don't delete source branch - Iceberg metadata contains absolute paths
+    # to the source branch that must remain accessible after merge
+    delete_source_branch: bool = False,
     run_feast_apply: bool = False,
 ):
     """Run the Kronodroid Iceberg transformation pipeline.

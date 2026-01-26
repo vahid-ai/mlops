@@ -333,24 +333,38 @@ def write_iceberg_table(
 ) -> None:
     """Write DataFrame as an Iceberg table with Avro format.
 
+    Uses Hadoop catalog with explicit absolute S3 paths to ensure metadata
+    contains fully-qualified s3a:// paths that work after LakeFS merge.
+
     Args:
         df: DataFrame to write
         catalog: Iceberg catalog name
-        branch: LakeFS branch name (required for LakeFSCatalog)
+        branch: LakeFS branch name (used to construct S3 path)
         database: Database/namespace name
         table: Table name
         mode: Write mode (overwrite, append)
     """
-    # LakeFSCatalog uses format: catalog.branch.database.table
-    # Use backticks for branch name to handle special chars like hyphens
-    full_table_name = f"{catalog}.`{branch}`.{database}.{table}"
-    print(f"Writing Iceberg table: {full_table_name}")
+    # Get the LakeFS repository from environment
+    lakefs_repository = os.environ.get("LAKEFS_REPOSITORY", "kronodroid")
 
-    # Write with Avro format (matches repo defaults; enables consistent file type across jobs)
+    # For Hadoop catalog, use catalog.database.table format (no branch in namespace)
+    full_table_name = f"{catalog}.{database}.{table}"
+
+    # Construct absolute S3 path for the table location using the per-run branch
+    # After merge to main, these paths will still be accessible via LakeFS
+    # (as long as the source branch is not deleted)
+    table_location = f"s3a://{lakefs_repository}/{branch}/{database}/{table}"
+
+    print(f"Writing Iceberg table: {full_table_name}")
+    print(f"  Location: {table_location}")
+
+    # Write with Avro format and explicit absolute location in metadata
     df.writeTo(full_table_name).tableProperty(
         "write.format.default", "avro"
     ).tableProperty(
         "write.avro.compression-codec", "snappy"
+    ).tableProperty(
+        "location", table_location
     ).using("iceberg").createOrReplace()
 
     print(f"Successfully wrote {df.count()} rows to {full_table_name}")
@@ -359,16 +373,19 @@ def write_iceberg_table(
 def ensure_databases(spark: SparkSession, catalog: str, branch: str, databases: List[str]) -> None:
     """Ensure Iceberg databases exist.
 
+    Uses Hadoop catalog format (catalog.database) for compatibility with training.
+    HadoopCatalog creates namespaces as directories under the warehouse path.
+
     Args:
         spark: SparkSession instance
         catalog: Catalog name
-        branch: LakeFS branch name (required for LakeFSCatalog)
+        branch: LakeFS branch name (used for S3 path construction in tables)
         databases: List of database names to create
     """
     for db in databases:
-        # LakeFSCatalog uses format: catalog.branch.database
-        # Use backticks for branch name to handle special chars like hyphens
-        full_db = f"{catalog}.`{branch}`.{db}"
+        # Hadoop catalog uses format: catalog.database (no branch in namespace)
+        full_db = f"{catalog}.{db}"
+        # HadoopCatalog doesn't support LOCATION - it uses warehouse path
         print(f"Creating database if not exists: {full_db}")
         spark.sql(f"CREATE DATABASE IF NOT EXISTS {full_db}")
 

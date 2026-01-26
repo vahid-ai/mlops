@@ -711,7 +711,7 @@ def _run_kubeflow_via_sparkapplication(
     # Iceberg metadata embeds absolute S3 paths, so if we used per-run branches,
     # the paths would become invalid after merge and branch deletion.
     catalog_name = "lakefs"
-    warehouse_path = f"s3a://{lakefs_repository}/{lakefs_branch}/iceberg"
+    warehouse_path = f"s3a://{lakefs_repository}/{lakefs_branch}"
 
     minio_access_key = os.getenv("MINIO_ACCESS_KEY_ID", "")
     minio_secret_key = os.getenv("MINIO_SECRET_ACCESS_KEY", "")
@@ -1456,9 +1456,12 @@ offline_store:
     # Iceberg extensions
     spark.sql.extensions: org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions
     # LakeFS Iceberg catalog (Hadoop-based)
+    # Tables are at s3a://repository/branch/database/table
     spark.sql.catalog.lakefs: org.apache.iceberg.spark.SparkCatalog
     spark.sql.catalog.lakefs.type: hadoop
-    spark.sql.catalog.lakefs.warehouse: s3a://{lakefs_repository}/main/iceberg
+    spark.sql.catalog.lakefs.warehouse: s3a://{lakefs_repository}/main
+    # Set default filesystem to S3A for resolving relative paths in Iceberg metadata
+    spark.hadoop.fs.defaultFS: s3a://{lakefs_repository}/main
     # S3A filesystem for LakeFS S3 gateway
     spark.hadoop.fs.s3a.impl: org.apache.hadoop.fs.s3a.S3AFileSystem
     spark.hadoop.fs.s3a.path.style.access: "true"

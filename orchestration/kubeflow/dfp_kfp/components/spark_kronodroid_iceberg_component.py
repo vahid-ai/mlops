@@ -118,10 +118,9 @@ spec:
         value: "{lakefs_branch}"
   deps:
     packages:
-      # iceberg-spark-runtime includes avro support - no separate iceberg-avro package exists
+      # iceberg-spark-runtime includes avro support
       - org.apache.iceberg:iceberg-spark-runtime-3.5_2.12:1.5.2
-      # LakeFS Iceberg catalog for open-source lakeFS (HadoopCatalog approach)
-      - io.lakefs:lakefs-iceberg:0.1.4
+      # AWS/S3 support for LakeFS S3 gateway
       - org.apache.hadoop:hadoop-aws:3.3.4
       - com.amazonaws:aws-java-sdk-bundle:1.12.262
   sparkConf:
@@ -130,10 +129,10 @@ spec:
     spark.sql.extensions: org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions
     spark.sql.iceberg.write.format.default: avro
     spark.sql.iceberg.write.avro.compression-codec: snappy
-    # Use LakeFSCatalog (HadoopCatalog) - REST Catalog requires lakeFS Enterprise
+    # Use Hadoop catalog with s3a:// paths for compatibility with training jobs
     spark.sql.catalog.lakefs: org.apache.iceberg.spark.SparkCatalog
-    spark.sql.catalog.lakefs.catalog-impl: io.lakefs.iceberg.LakeFSCatalog
-    spark.sql.catalog.lakefs.warehouse: "lakefs://{lakefs_repository}"
+    spark.sql.catalog.lakefs.type: hadoop
+    spark.sql.catalog.lakefs.warehouse: "s3a://{lakefs_repository}/{target_branch}"
     spark.sql.catalog.lakefs.cache-enabled: "false"
     # S3A filesystem config - lakeFS acts as S3 gateway
     spark.hadoop.fs.s3.impl: org.apache.hadoop.fs.s3a.S3AFileSystem
@@ -509,10 +508,9 @@ spec:
         value: "{lakefs_branch}"
   deps:
     packages:
-      # iceberg-spark-runtime includes avro support - no separate iceberg-avro package exists
+      # iceberg-spark-runtime includes avro support
       - org.apache.iceberg:iceberg-spark-runtime-3.5_2.12:1.5.2
-      # LakeFS Iceberg catalog for open-source lakeFS (HadoopCatalog approach)
-      - io.lakefs:lakefs-iceberg:0.1.4
+      # AWS/S3 support for LakeFS S3 gateway
       - org.apache.hadoop:hadoop-aws:3.3.4
       - com.amazonaws:aws-java-sdk-bundle:1.12.262
   sparkConf:
@@ -521,10 +519,10 @@ spec:
     spark.sql.extensions: org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions
     spark.sql.iceberg.write.format.default: avro
     spark.sql.iceberg.write.avro.compression-codec: snappy
-    # Use LakeFSCatalog (HadoopCatalog) - REST Catalog requires lakeFS Enterprise
+    # Use Hadoop catalog with s3a:// paths for compatibility with training jobs
     spark.sql.catalog.{catalog_name}: org.apache.iceberg.spark.SparkCatalog
-    spark.sql.catalog.{catalog_name}.catalog-impl: io.lakefs.iceberg.LakeFSCatalog
-    spark.sql.catalog.{catalog_name}.warehouse: "lakefs://{lakefs_repository}"
+    spark.sql.catalog.{catalog_name}.type: hadoop
+    spark.sql.catalog.{catalog_name}.warehouse: "s3a://{lakefs_repository}/{target_branch}"
     spark.sql.catalog.{catalog_name}.cache-enabled: "false"
     # S3A filesystem config - lakeFS acts as S3 gateway
     spark.hadoop.fs.s3.impl: org.apache.hadoop.fs.s3a.S3AFileSystem
