@@ -54,6 +54,13 @@ tasks:
     cmds:
       - bash ./tools/scripts/kind_portforward.sh status
 
+  kfp:clear:
+    desc: Clear and delete all Kubeflow pipelines, runs, experiments, and kronodroid pods/services
+    cmds:
+      - uv run --with kfp,kubernetes tools/scripts/clear_kfp.py
+    env:
+      NAMESPACE: "{{.NAMESPACE}}"
+
   kind:up:
     desc: Bootstrap kind + apply kustomize overlay
     env:
@@ -165,3 +172,16 @@ tasks:
       - echo ""
       - echo "SparkApplications in {{.NAMESPACE}}:"
       - kubectl -n "{{.NAMESPACE}}" get sparkapplications 2>/dev/null || echo "  (none or CRD not installed)"
+
+  spark:logs:
+    desc: Tail logs for the latest Spark job driver pod
+    cmds:
+      - |
+        POD=$(kubectl get pods -n "{{.NAMESPACE}}" -l spark-role=driver --sort-by=.metadata.creationTimestamp -o name | tail -n 1)
+        if [ -z "$POD" ]; then
+          echo "No Spark driver pods found in namespace {{.NAMESPACE}}"
+          exit 0
+        fi
+        POD_NAME=${POD#pod/}
+        echo "Tailing logs for $POD_NAME..."
+        kubectl logs -n "{{.NAMESPACE}}" "$POD" -f --tail=200
