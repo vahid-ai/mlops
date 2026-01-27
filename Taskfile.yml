@@ -54,6 +54,13 @@ tasks:
     cmds:
       - bash ./tools/scripts/kind_portforward.sh status
 
+  port-forward:reset:
+    desc: Kill all kubectl port-forwards and restart them fresh
+    cmds:
+      - pkill -f "kubectl.*port-forward" || true
+      - sleep 0.5
+      - bash ./tools/scripts/kind_portforward.sh start
+
   kfp:clear:
     desc: Clear and delete all Kubeflow pipelines, runs, experiments, and kronodroid pods/services
     cmds:
