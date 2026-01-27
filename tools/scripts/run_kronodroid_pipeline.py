@@ -282,6 +282,15 @@ def run_dlt_ingestion(
         print(f"dlt pipeline completed successfully")
         print(f"  - Dataset: {pipeline.dataset_name}")
         print(f"  - Destination: {destination}")
+
+        # If using LakeFS, commit ingestion results immediately so the branch is not dirty
+        # for subsequent transformation steps that may want to merge into it.
+        if destination == "lakefs":
+            commit_to_lakefs(
+                lakefs_branch or "main",
+                f"Ingested raw data via dlt: {datetime.now().isoformat()}"
+            )
+
         return True
     except Exception as e:
         error_msg = str(e)
@@ -304,6 +313,13 @@ def run_dlt_ingestion(
                 print(f"dlt pipeline completed successfully on retry")
                 print(f"  - Dataset: {pipeline.dataset_name}")
                 print(f"  - Destination: {destination}")
+
+                if destination == "lakefs":
+                    commit_to_lakefs(
+                        lakefs_branch or "main",
+                        f"Ingested raw data via dlt (retry): {datetime.now().isoformat()}"
+                    )
+
                 return True
             except Exception as retry_e:
                 print(f"ERROR: dlt ingestion failed on retry: {retry_e}")
@@ -487,8 +503,8 @@ def run_kubeflow_transformations(
     if use_kfp_client:
         return _run_kubeflow_via_kfp_client(
             kfp_host=kfp_host,
-            minio_endpoint=minio_cluster_endpoint,
-            minio_bucket=minio_bucket,
+            minio_endpoint=raw_endpoint,
+            minio_bucket=raw_bucket,
             minio_prefix=raw_prefix,
             lakefs_endpoint=lakefs_cluster_endpoint,
             lakefs_repository=lakefs_repository,
@@ -599,11 +615,11 @@ def _run_kubeflow_via_kfp_client(
         # Wait for completion
         result = client.wait_for_run_completion(run.run_id, timeout=timeout_seconds)
 
-        if result.run.status == "Succeeded":
+        if result.state == "SUCCEEDED":
             print("Kubeflow SparkOperator transformations completed successfully")
             return True
         else:
-            print(f"ERROR: KFP run failed with status: {result.run.status}")
+            print(f"ERROR: KFP run failed with status: {result.state}")
             return False
 
     except Exception as e:

@@ -142,15 +142,23 @@ def kronodroid_iceberg_pipeline(
         executor_instances=executor_instances,
         executor_memory=executor_memory,
         timeout_seconds=spark_timeout_seconds,
-    )
+    ).set_memory_limit("512Mi").set_cpu_limit("1000m")
 
-    # Configure the task to use LakeFS secret for branch creation
+    # Configure credentials for Spark task
+    kubernetes.use_secret_as_env(
+        task=spark_task,
+        secret_name=minio_secret_name,
+        secret_key_to_env={
+            "MINIO_ACCESS_KEY_ID": "MINIO_ACCESS_KEY_ID",
+            "MINIO_SECRET_ACCESS_KEY": "MINIO_SECRET_ACCESS_KEY",
+        },
+    )
     kubernetes.use_secret_as_env(
         task=spark_task,
         secret_name=lakefs_secret_name,
         secret_key_to_env={
-            "access-key": "LAKEFS_ACCESS_KEY_ID",
-            "secret-key": "LAKEFS_SECRET_ACCESS_KEY",
+            "LAKEFS_ACCESS_KEY_ID": "LAKEFS_ACCESS_KEY_ID",
+            "LAKEFS_SECRET_ACCESS_KEY": "LAKEFS_SECRET_ACCESS_KEY",
         },
     )
 
@@ -164,7 +172,7 @@ def kronodroid_iceberg_pipeline(
         run_id=run_id,
         pipeline_name="kronodroid-iceberg",
         delete_source_branch=delete_source_branch,
-    )
+    ).set_memory_limit("512Mi").set_cpu_limit("500m")
 
     # Set dependency
     commit_merge_task.after(spark_task)
@@ -174,8 +182,8 @@ def kronodroid_iceberg_pipeline(
         task=commit_merge_task,
         secret_name=lakefs_secret_name,
         secret_key_to_env={
-            "access-key": "LAKEFS_ACCESS_KEY_ID",
-            "secret-key": "LAKEFS_SECRET_ACCESS_KEY",
+            "LAKEFS_ACCESS_KEY_ID": "LAKEFS_ACCESS_KEY_ID",
+            "LAKEFS_SECRET_ACCESS_KEY": "LAKEFS_SECRET_ACCESS_KEY",
         },
     )
 
@@ -286,15 +294,24 @@ def kronodroid_full_pipeline(
         executor_instances=executor_instances,
         executor_memory=executor_memory,
         timeout_seconds=spark_timeout_seconds,
-    )
+    ).set_memory_limit("512Mi").set_cpu_limit("1000m")
 
+    # Configure MinIO credentials for Spark task
+    kubernetes.use_secret_as_env(
+        task=spark_task,
+        secret_name=minio_secret_name,
+        secret_key_to_env={
+            "MINIO_ACCESS_KEY_ID": "MINIO_ACCESS_KEY_ID",
+            "MINIO_SECRET_ACCESS_KEY": "MINIO_SECRET_ACCESS_KEY",
+        },
+    )
     # Configure LakeFS credentials for Spark task
     kubernetes.use_secret_as_env(
         task=spark_task,
         secret_name=lakefs_secret_name,
         secret_key_to_env={
-            "access-key": "LAKEFS_ACCESS_KEY_ID",
-            "secret-key": "LAKEFS_SECRET_ACCESS_KEY",
+            "LAKEFS_ACCESS_KEY_ID": "LAKEFS_ACCESS_KEY_ID",
+            "LAKEFS_SECRET_ACCESS_KEY": "LAKEFS_SECRET_ACCESS_KEY",
         },
     )
 
@@ -308,15 +325,14 @@ def kronodroid_full_pipeline(
         run_id=run_id,
         pipeline_name="kronodroid-full",
         delete_source_branch=True,
-    )
-    commit_merge_task.after(spark_task)
+    ).set_memory_limit("512Mi").set_cpu_limit("500m")
 
     kubernetes.use_secret_as_env(
         task=commit_merge_task,
         secret_name=lakefs_secret_name,
         secret_key_to_env={
-            "access-key": "LAKEFS_ACCESS_KEY_ID",
-            "secret-key": "LAKEFS_SECRET_ACCESS_KEY",
+            "LAKEFS_ACCESS_KEY_ID": "LAKEFS_ACCESS_KEY_ID",
+            "LAKEFS_SECRET_ACCESS_KEY": "LAKEFS_SECRET_ACCESS_KEY",
         },
     )
 
