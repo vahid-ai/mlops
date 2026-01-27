@@ -266,6 +266,16 @@ def write_iceberg_table(
     full_table_name = f"{catalog}.{database}.{table}"
     print(f"Writing Iceberg table: {full_table_name}")
 
+    # Get SparkSession from DataFrame
+    spark = df.sparkSession
+
+    # Drop existing table to avoid location conflicts from previous runs
+    # (HadoopCatalog stores absolute paths in metadata which may differ between runs)
+    try:
+        spark.sql(f"DROP TABLE IF EXISTS {full_table_name}")
+    except Exception as e:
+        print(f"  Warning: Could not drop existing table: {e}")
+
     # Write with Avro format (matches repo defaults; enables consistent file type across jobs)
     df.writeTo(full_table_name).tableProperty(
         "write.format.default", "avro"

@@ -699,7 +699,7 @@ def _run_kubeflow_via_sparkapplication(
     # Build SparkApplication manifest
     # Use Hadoop-based Iceberg catalog since LakeFS OSS doesn't include REST catalog
     catalog_name = "lakefs"
-    warehouse_path = f"s3a://{lakefs_repository}/{per_run_branch}"
+    warehouse_path = f"s3a://{lakefs_repository}/{lakefs_branch}/iceberg"
 
     minio_access_key = os.getenv("MINIO_ACCESS_KEY_ID", "")
     minio_secret_key = os.getenv("MINIO_SECRET_ACCESS_KEY", "")
