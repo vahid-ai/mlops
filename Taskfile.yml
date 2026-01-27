@@ -20,6 +20,92 @@ tasks:
       - task: spark-operator:install
       - task: spark-image
 
+  up:full:
+    desc: Complete from-scratch setup - creates cluster, configures everything, and starts port-forwarding
+    cmds:
+      - |
+        set -e
+        echo "=== Starting complete MLOps platform setup ==="
+        echo ""
+        
+        echo "Step 1/8: Tearing down any existing cluster..."
+        kind delete cluster --name "{{.CLUSTER_NAME}}" || true
+        task port-forward:stop || true
+        sleep 2
+        
+        echo ""
+        echo "Step 2/8: Creating kind cluster and deploying services..."
+        task kind:up
+        
+        echo ""
+        echo "Step 3/8: Installing Kubeflow Pipelines..."
+        PIPELINE_VERSION=2.4.0
+        kubectl apply -k "github.com/kubeflow/pipelines/manifests/kustomize/cluster-scoped-resources?ref=$PIPELINE_VERSION"
+        kubectl wait --for condition=established --timeout=60s crd/applications.app.k8s.io || true
+        kubectl apply -k "github.com/kubeflow/pipelines/manifests/kustomize/env/platform-agnostic-emissary?ref=$PIPELINE_VERSION"
+        
+        # Patch KFP minio to use official minio image (gcr.io/ml-pipeline image is unavailable)
+        echo "Patching KFP minio deployment with working image..."
+        sleep 5
+        kubectl -n kubeflow set image deployment/minio minio=minio/minio:RELEASE.2024-10-02T17-50-41Z || true
+        
+        echo ""
+        echo "Step 4/8: Installing Spark Operator..."
+        task spark-operator:install || {
+          echo "Spark Operator install timed out, waiting for pods to be ready..."
+          kubectl -n spark-operator wait --for=condition=ready pod -l app.kubernetes.io/name=spark-operator --timeout=300s || true
+        }
+        
+        echo ""
+        echo "Step 5/8: Building and loading Spark image..."
+        task spark-image
+        
+        echo ""
+        echo "Step 6/8: Waiting for all pods to be ready..."
+        echo "Waiting for dfp namespace pods..."
+        kubectl wait --for=condition=ready pod -l app=minio -n "{{.NAMESPACE}}" --timeout=180s || true
+        kubectl wait --for=condition=ready pod -l app=lakefs -n "{{.NAMESPACE}}" --timeout=180s || true
+        kubectl wait --for=condition=ready pod -l app=mlflow -n "{{.NAMESPACE}}" --timeout=180s || true
+        kubectl wait --for=condition=ready pod -l app=redis -n "{{.NAMESPACE}}" --timeout=180s || true
+        kubectl wait --for=condition=ready pod -l app=lakefs-postgres -n "{{.NAMESPACE}}" --timeout=180s || true
+        
+        echo "Waiting for kubeflow namespace pods (this may take a few minutes)..."
+        # Wait for critical KFP pods with retries
+        for i in 1 2 3; do
+          kubectl wait --for=condition=ready pod -l app=ml-pipeline -n kubeflow --timeout=180s && break || sleep 10
+        done
+        kubectl wait --for=condition=ready pod -l app=ml-pipeline-ui -n kubeflow --timeout=180s || true
+        kubectl wait --for=condition=ready pod -l app=minio -n kubeflow --timeout=180s || true
+        kubectl wait --for=condition=ready pod -l app=mysql -n kubeflow --timeout=180s || true
+        echo "Core KFP pods ready!"
+        
+        echo ""
+        echo "Step 7/8: Generating LakeFS credentials..."
+        task lakefs:keys
+        
+        echo ""
+        echo "Step 8/8: Starting port-forwarding..."
+        task port-forward:reset
+        
+        echo ""
+        echo "====================================================="
+        echo "  MLOps Platform Setup Complete!"
+        echo "====================================================="
+        echo ""
+        echo "Services available at:"
+        echo "  - Kubeflow Pipelines UI: http://localhost:8081"
+        echo "  - Kubeflow Pipelines API: http://localhost:8080"
+        echo "  - LakeFS:                 http://localhost:8000"
+        echo "  - MinIO Console:          http://localhost:19001"
+        echo "  - MinIO API:              http://localhost:19000"
+        echo "  - MLflow:                 http://localhost:5050"
+        echo "  - Redis:                  localhost:16379"
+        echo ""
+        echo "LakeFS credentials have been saved to .env"
+        echo ""
+        echo "You're ready to run Kubeflow pipelines!"
+
+
   down:
     desc: Delete kind cluster
     cmds:
@@ -241,7 +327,7 @@ tasks:
               --create-namespace \
               --values "{{.SPARK_OPERATOR_VALUES}}"
           fi
-      - kubectl -n "{{.SPARK_OPERATOR_NAMESPACE}}" rollout status deployment/spark-operator-controller --timeout=120s
+      - kubectl -n "{{.SPARK_OPERATOR_NAMESPACE}}" rollout status deployment/spark-operator-controller --timeout=300s
       - echo "Spark Operator installed successfully"
 
   spark-operator:uninstall:

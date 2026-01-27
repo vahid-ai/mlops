@@ -39,6 +39,56 @@ See inline README stubs and doc files under `docs/` for guidance on how each pac
   - Redis: `127.0.0.1:16379` (use `redis-cli -h 127.0.0.1 -p 16379 ping`)
 - For cloud, reuse the same manifests with overlays to swap NodePort → LoadBalancer/Ingress and point LakeFS/MLflow at managed object storage + Postgres.
 
+### Full Platform Setup (Recommended)
+
+For a complete from-scratch setup including Kubeflow Pipelines, use:
+
+```bash
+task up:full
+```
+
+This command performs a complete 8-step setup:
+
+| Step | Description |
+|------|-------------|
+| 1/8 | Tears down any existing Kind cluster and stops port-forwards |
+| 2/8 | Creates Kind cluster and deploys core services (MinIO, LakeFS, MLflow, Redis, Postgres) |
+| 3/8 | Installs Kubeflow Pipelines v2.4.0 |
+| 4/8 | Installs Spark Operator via Helm |
+| 5/8 | Builds and loads the `dfp-spark` Docker image |
+| 6/8 | Waits for all pods to be ready |
+| 7/8 | Generates fresh LakeFS credentials (saved to `.env`) |
+| 8/8 | Starts all port-forwards |
+
+After completion, the following services are available:
+
+| Service | URL |
+|---------|-----|
+| Kubeflow Pipelines UI | http://localhost:8081 |
+| Kubeflow Pipelines API | http://localhost:8080 |
+| LakeFS | http://localhost:8000 |
+| MinIO Console | http://localhost:19001 |
+| MinIO API | http://localhost:19000 |
+| MLflow | http://localhost:5050 |
+| Redis | localhost:16379 |
+
+LakeFS credentials are automatically generated and saved to `.env`. The setup takes approximately 5-10 minutes depending on network speed for image pulls.
+
+### Other Useful Tasks
+
+```bash
+task up              # Quick setup (no Kubeflow Pipelines)
+task down            # Delete the Kind cluster
+task status          # Show cluster status
+task port-forward    # Start port-forwards
+task port-forward:status  # Check port-forward status
+task port-forward:reset   # Reset all port-forwards
+task lakefs:keys     # Reset LakeFS and generate new credentials
+task kfp:clear       # Clear all Kubeflow pipelines and runs
+task spark:logs      # Tail logs for the latest Spark job
+```
+
+
 ## Kronodroid Data Pipeline
 
 The Kronodroid Android malware detection dataset can be ingested from Kaggle and processed through the dlt + dbt + Feast pipeline.
