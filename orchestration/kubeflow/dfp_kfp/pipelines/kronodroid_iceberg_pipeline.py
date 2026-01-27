@@ -26,7 +26,7 @@ Usage:
 import uuid
 from typing import NamedTuple
 
-from kfp import dsl
+from kfp import dsl, kubernetes
 from kfp.dsl import PipelineTask
 
 from orchestration.kubeflow.dfp_kfp.components.spark_kronodroid_iceberg_component import (
@@ -145,23 +145,13 @@ def kronodroid_iceberg_pipeline(
     )
 
     # Configure the task to use LakeFS secret for branch creation
-    spark_task.set_env_variable(
-        name="LAKEFS_ACCESS_KEY_ID",
-        value_from_secret=dsl.V1EnvVarSource(
-            secret_key_ref=dsl.V1SecretKeySelector(
-                name=lakefs_secret_name,
-                key="access-key",
-            )
-        ),
-    )
-    spark_task.set_env_variable(
-        name="LAKEFS_SECRET_ACCESS_KEY",
-        value_from_secret=dsl.V1EnvVarSource(
-            secret_key_ref=dsl.V1SecretKeySelector(
-                name=lakefs_secret_name,
-                key="secret-key",
-            )
-        ),
+    kubernetes.use_secret_as_env(
+        task=spark_task,
+        secret_name=lakefs_secret_name,
+        secret_key_to_env={
+            "access-key": "LAKEFS_ACCESS_KEY_ID",
+            "secret-key": "LAKEFS_SECRET_ACCESS_KEY",
+        },
     )
 
     # Step 2: Commit and merge LakeFS branch
@@ -180,23 +170,13 @@ def kronodroid_iceberg_pipeline(
     commit_merge_task.after(spark_task)
 
     # Configure LakeFS credentials
-    commit_merge_task.set_env_variable(
-        name="LAKEFS_ACCESS_KEY_ID",
-        value_from_secret=dsl.V1EnvVarSource(
-            secret_key_ref=dsl.V1SecretKeySelector(
-                name=lakefs_secret_name,
-                key="access-key",
-            )
-        ),
-    )
-    commit_merge_task.set_env_variable(
-        name="LAKEFS_SECRET_ACCESS_KEY",
-        value_from_secret=dsl.V1EnvVarSource(
-            secret_key_ref=dsl.V1SecretKeySelector(
-                name=lakefs_secret_name,
-                key="secret-key",
-            )
-        ),
+    kubernetes.use_secret_as_env(
+        task=commit_merge_task,
+        secret_name=lakefs_secret_name,
+        secret_key_to_env={
+            "access-key": "LAKEFS_ACCESS_KEY_ID",
+            "secret-key": "LAKEFS_SECRET_ACCESS_KEY",
+        },
     )
 
     # Step 3: (Optional) Feast apply - would plug into existing component
@@ -309,23 +289,13 @@ def kronodroid_full_pipeline(
     )
 
     # Configure LakeFS credentials for Spark task
-    spark_task.set_env_variable(
-        name="LAKEFS_ACCESS_KEY_ID",
-        value_from_secret=dsl.V1EnvVarSource(
-            secret_key_ref=dsl.V1SecretKeySelector(
-                name=lakefs_secret_name,
-                key="access-key",
-            )
-        ),
-    )
-    spark_task.set_env_variable(
-        name="LAKEFS_SECRET_ACCESS_KEY",
-        value_from_secret=dsl.V1EnvVarSource(
-            secret_key_ref=dsl.V1SecretKeySelector(
-                name=lakefs_secret_name,
-                key="secret-key",
-            )
-        ),
+    kubernetes.use_secret_as_env(
+        task=spark_task,
+        secret_name=lakefs_secret_name,
+        secret_key_to_env={
+            "access-key": "LAKEFS_ACCESS_KEY_ID",
+            "secret-key": "LAKEFS_SECRET_ACCESS_KEY",
+        },
     )
 
     # Step 3: LakeFS commit + merge
@@ -341,23 +311,13 @@ def kronodroid_full_pipeline(
     )
     commit_merge_task.after(spark_task)
 
-    commit_merge_task.set_env_variable(
-        name="LAKEFS_ACCESS_KEY_ID",
-        value_from_secret=dsl.V1EnvVarSource(
-            secret_key_ref=dsl.V1SecretKeySelector(
-                name=lakefs_secret_name,
-                key="access-key",
-            )
-        ),
-    )
-    commit_merge_task.set_env_variable(
-        name="LAKEFS_SECRET_ACCESS_KEY",
-        value_from_secret=dsl.V1EnvVarSource(
-            secret_key_ref=dsl.V1SecretKeySelector(
-                name=lakefs_secret_name,
-                key="secret-key",
-            )
-        ),
+    kubernetes.use_secret_as_env(
+        task=commit_merge_task,
+        secret_name=lakefs_secret_name,
+        secret_key_to_env={
+            "access-key": "LAKEFS_ACCESS_KEY_ID",
+            "secret-key": "LAKEFS_SECRET_ACCESS_KEY",
+        },
     )
 
     # Step 4: Feast apply (optional) - plug into existing stubs
