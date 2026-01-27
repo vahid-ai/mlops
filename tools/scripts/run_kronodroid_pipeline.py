@@ -408,10 +408,10 @@ def run_kubeflow_transformations(
     minio_secret_name: str = "minio-credentials",
     lakefs_secret_name: str = "lakefs-credentials",
     driver_cores: int = 1,
-    driver_memory: str = "2g",
+    driver_memory: str = "4g",
     executor_cores: int = 2,
     executor_instances: int = 2,
-    executor_memory: str = "2g",
+    executor_memory: str = "6g",
     timeout_seconds: int = 3600,
     use_kfp_client: bool = False,
     kfp_host: str | None = None,
@@ -786,6 +786,14 @@ def _run_kubeflow_via_sparkapplication(
                 f"spark.hadoop.fs.s3a.bucket.{lakefs_repository}.endpoint": lakefs_endpoint,
                 f"spark.hadoop.fs.s3a.bucket.{lakefs_repository}.access.key": lakefs_access_key,
                 f"spark.hadoop.fs.s3a.bucket.{lakefs_repository}.secret.key": lakefs_secret_key,
+                # Memory optimization settings
+                "spark.driver.memoryOverheadFactor": "0.2",
+                "spark.executor.memoryOverheadFactor": "0.2",
+                "spark.sql.shuffle.partitions": "16",
+                "spark.sql.adaptive.enabled": "true",
+                "spark.sql.adaptive.coalescePartitions.enabled": "true",
+                "spark.memory.fraction": "0.8",
+                "spark.memory.storageFraction": "0.3",
             },
         },
     }
@@ -1352,13 +1360,13 @@ def main():
     # Spark resource options for testing
     parser.add_argument(
         "--driver-memory",
-        default="2g",
-        help="Spark driver memory (default: 2g)",
+        default="4g",
+        help="Spark driver memory (default: 4g)",
     )
     parser.add_argument(
         "--executor-memory",
-        default="2g",
-        help="Spark executor memory (default: 2g)",
+        default="6g",
+        help="Spark executor memory (default: 6g)",
     )
     parser.add_argument(
         "--executor-instances",
