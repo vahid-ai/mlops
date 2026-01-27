@@ -60,6 +60,94 @@ tasks:
       - pkill -f "kubectl.*port-forward" || true
       - sleep 0.5
       - bash ./tools/scripts/kind_portforward.sh start
+  
+  kubeflow:port-forward:
+    desc: Port-forward Kubeflow Pipelines UI to localhost:8080
+    vars:
+      KFP_NAMESPACE: '{{.KFP_NAMESPACE | default "kubeflow"}}'
+    cmds:
+      - 'echo "Forwarding KFP UI to http://localhost:8080 (press Ctrl+C to stop)"'
+      - 'kubectl port-forward -n "{{.KFP_NAMESPACE}}" svc/ml-pipeline-ui 8080:80'
+
+  lakefs:keys:
+    desc: Reset LakeFS and generate new credentials (updates .env file)
+    cmds:
+      - |
+        set -e
+        NAMESPACE="{{.NAMESPACE}}"
+        
+        echo "Resetting LakeFS to generate new credentials..."
+        echo ""
+        
+        # Step 1: Reset the LakeFS postgres database
+        echo "Step 1: Resetting LakeFS database..."
+        kubectl exec -n "${NAMESPACE}" deployment/lakefs-postgres -- \
+          psql -U lakefs -c "DROP SCHEMA public CASCADE; CREATE SCHEMA public;" 2>/dev/null || {
+          echo "Warning: Could not reset database, continuing anyway..."
+        }
+        
+        # Step 2: Restart LakeFS deployment to pick up fresh state
+        echo "Step 2: Restarting LakeFS deployment..."
+        kubectl rollout restart -n "${NAMESPACE}" deployment/lakefs
+        kubectl rollout status -n "${NAMESPACE}" deployment/lakefs --timeout=120s
+        
+        # Give it a moment to initialize
+        sleep 3
+        
+        # Step 3: Run setup to create new admin credentials
+        echo "Step 3: Running LakeFS setup..."
+        OUTPUT=$(kubectl exec -n "${NAMESPACE}" deployment/lakefs -- \
+          lakefs setup --user-name admin 2>&1)
+        
+        echo "$OUTPUT" | tail -5
+        
+        # Parse credentials from output
+        # Format is YAML: access_key_id: AKIAJ...  or  secret_access_key: ...
+        ACCESS_KEY_ID=$(echo "$OUTPUT" | grep "access_key_id:" | awk '{print $2}' | head -1)
+        SECRET_ACCESS_KEY=$(echo "$OUTPUT" | grep "secret_access_key:" | awk '{print $2}' | head -1)
+        
+        if [ -z "$ACCESS_KEY_ID" ] || [ -z "$SECRET_ACCESS_KEY" ]; then
+          echo ""
+          echo "Could not parse credentials from output."
+          echo "Full output:"
+          echo "$OUTPUT"
+          echo ""
+          echo "Please manually copy the access_key_id and secret_access_key to .env"
+          exit 1
+        fi
+        
+        echo ""
+        echo "New credentials generated!"
+        echo "  Access Key ID:     $ACCESS_KEY_ID"
+        echo "  Secret Access Key: ${SECRET_ACCESS_KEY:0:10}..."
+        
+        # Update .env file
+        if [ -f .env ]; then
+          if grep -q "^LAKEFS_ACCESS_KEY_ID=" .env; then
+            sed -i '' "s|^LAKEFS_ACCESS_KEY_ID=.*|LAKEFS_ACCESS_KEY_ID=$ACCESS_KEY_ID|" .env
+          else
+            echo "LAKEFS_ACCESS_KEY_ID=$ACCESS_KEY_ID" >> .env
+          fi
+          
+          if grep -q "^LAKEFS_SECRET_ACCESS_KEY=" .env; then
+            sed -i '' "s|^LAKEFS_SECRET_ACCESS_KEY=.*|LAKEFS_SECRET_ACCESS_KEY=$SECRET_ACCESS_KEY|" .env
+          else
+            echo "LAKEFS_SECRET_ACCESS_KEY=$SECRET_ACCESS_KEY" >> .env
+          fi
+          
+          echo ""
+          echo ".env file updated with new LakeFS credentials"
+        else
+          echo "LAKEFS_ACCESS_KEY_ID=$ACCESS_KEY_ID" > .env
+          echo "LAKEFS_SECRET_ACCESS_KEY=$SECRET_ACCESS_KEY" >> .env
+          echo ".env file created with LakeFS credentials"
+        fi
+        
+        echo ""
+        echo "Done! LakeFS has been reset with new credentials."
+        echo ""
+        echo "NOTE: All existing repositories and data in LakeFS have been deleted."
+        echo "You may need to restart port-forwards: task port-forward:reset"
 
   kfp:clear:
     desc: Clear and delete all Kubeflow pipelines, runs, experiments, and kronodroid pods/services
