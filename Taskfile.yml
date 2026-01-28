@@ -259,14 +259,58 @@ tasks:
       - kind delete cluster --name "{{.CLUSTER_NAME}}"
 
   kind:status:
-    desc: Show deployments/pods/services in the dfp namespace
+    desc: Show deployments/pods/services across all namespaces and service URLs
+    vars:
+      KFP_NAMESPACE: '{{.KFP_NAMESPACE | default "kubeflow"}}'
+      SPARK_OPERATOR_NAMESPACE: '{{.SPARK_OPERATOR_NAMESPACE | default "spark-operator"}}'
     cmds:
       - |
           if ! kind get clusters | grep -qx "{{.CLUSTER_NAME}}"; then
             echo "kind cluster '{{.CLUSTER_NAME}}' not found"
             exit 0
           fi
-      - kubectl -n "{{.NAMESPACE}}" get deploy,po,svc
+          
+          echo "=============================================="
+          echo "  Namespace: {{.NAMESPACE}} (Core Services)"
+          echo "=============================================="
+          kubectl -n "{{.NAMESPACE}}" get deploy,po,svc
+          
+          echo ""
+          echo "=============================================="
+          echo "  Namespace: {{.KFP_NAMESPACE}} (Kubeflow Pipelines)"
+          echo "=============================================="
+          kubectl -n "{{.KFP_NAMESPACE}}" get deploy,po,svc 2>/dev/null || echo "  (namespace not found)"
+          
+          echo ""
+          echo "=============================================="
+          echo "  Namespace: {{.SPARK_OPERATOR_NAMESPACE}} (Spark Operator)"
+          echo "=============================================="
+          kubectl -n "{{.SPARK_OPERATOR_NAMESPACE}}" get deploy,po,svc 2>/dev/null || echo "  (namespace not found)"
+          
+          echo ""
+          echo "=============================================="
+          echo "  SparkApplications in {{.NAMESPACE}}"
+          echo "=============================================="
+          kubectl -n "{{.NAMESPACE}}" get sparkapplications 2>/dev/null || echo "  (none or CRD not installed)"
+          
+          echo ""
+          echo "=============================================="
+          echo "  Service Access URLs / Port-Forwards"
+          echo "=============================================="
+          echo ""
+          echo "  DFP Namespace Services:"
+          echo "    MinIO Console:          http://localhost:19001  (admin/minioadmin)"
+          echo "    MinIO API:              http://localhost:19000"
+          echo "    LakeFS:                 http://localhost:8000"
+          echo "    MLflow:                 http://localhost:5050"
+          echo "    Redis:                  localhost:16379"
+          echo ""
+          echo "  Kubeflow Namespace Services:"
+          echo "    Kubeflow Pipelines UI:  http://localhost:8081"
+          echo "    Kubeflow Pipelines API: http://localhost:8080"
+          echo ""
+          echo "  Run 'task port-forward:status' to check if port-forwards are active."
+          echo ""
 
   kind:logs:
     desc: Tail logs for APP (deployment name)
