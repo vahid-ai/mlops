@@ -11,11 +11,16 @@ __all__ = [
     "lakefs_commit_merge_op",
     "lakefs_commit_only_op",
     "commit_and_merge_lakefs_branch",
+    # Autoencoder training component
+    "train_kronodroid_autoencoder_op",
     # Pipelines
     "kronodroid_iceberg_pipeline",
     "kronodroid_full_pipeline",
     "compile_pipeline",
     "compile_full_pipeline",
+    # Autoencoder training pipeline
+    "kronodroid_autoencoder_pipeline",
+    "compile_autoencoder_pipeline",
 ]
 
 
@@ -41,6 +46,12 @@ def __getattr__(name: str):
         else:
             return commit_and_merge_lakefs_branch
 
+    if name == "train_kronodroid_autoencoder_op":
+        from orchestration.kubeflow.dfp_kfp.components.train_autoencoder_component import (
+            train_kronodroid_autoencoder_op,
+        )
+        return train_kronodroid_autoencoder_op
+
     if name in ("kronodroid_iceberg_pipeline", "kronodroid_full_pipeline", "compile_pipeline", "compile_full_pipeline"):
         from orchestration.kubeflow.dfp_kfp.pipelines.kronodroid_iceberg_pipeline import (
             kronodroid_iceberg_pipeline,
@@ -57,4 +68,15 @@ def __getattr__(name: str):
         else:
             return compile_full_pipeline
 
+    if name in ("kronodroid_autoencoder_pipeline", "compile_autoencoder_pipeline"):
+        from orchestration.kubeflow.dfp_kfp.pipelines.kronodroid_autoencoder_pipeline import (
+            kronodroid_autoencoder_pipeline,
+            compile_pipeline as compile_autoencoder_pipeline,
+        )
+        if name == "kronodroid_autoencoder_pipeline":
+            return kronodroid_autoencoder_pipeline
+        else:
+            return compile_autoencoder_pipeline
+
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
