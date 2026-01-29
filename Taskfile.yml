@@ -4,6 +4,8 @@ vars:
   CLUSTER_NAME: '{{.CLUSTER_NAME | default "dfp-kind"}}'
   KIND_CONFIG: '{{.KIND_CONFIG | default "./infra/k8s/kind/kind-config.yaml"}}'
   KUSTOMIZE_DIR: '{{.KUSTOMIZE_DIR | default "./infra/k8s/kind/manifests"}}'
+  KFP_NAMESPACE: '{{.KFP_NAMESPACE | default "kubeflow"}}'
+  KFP_HOST: '{{.KFP_HOST | default "http://localhost:8080/pipeline"}}'
   NAMESPACE: '{{.NAMESPACE | default "dfp"}}'
   PORT_FORWARD: '{{.PORT_FORWARD | default "1"}}'
 
@@ -235,7 +237,31 @@ tasks:
     cmds:
       - uv run --with kfp,kubernetes tools/scripts/clear_kfp.py
     env:
+      KFP_CLEAR_ALL_WORKFLOWS: "1"
+      KFP_HOST: "{{.KFP_HOST}}"
+      KFP_NAMESPACE: "{{.KFP_NAMESPACE}}"
       NAMESPACE: "{{.NAMESPACE}}"
+
+  kfp:reset:
+    desc: Delete all Argo workflow pods and resources in kubeflow and dfp namespaces
+    vars:
+      KFP_NAMESPACE: '{{.KFP_NAMESPACE | default "kubeflow"}}'
+      NAMESPACE: '{{.NAMESPACE | default "dfp"}}'
+    cmds:
+      - |
+        echo "Deleting workflow pods in {{.KFP_NAMESPACE}} namespace..."
+        kubectl delete pods -n {{.KFP_NAMESPACE}} -l workflows.argoproj.io/workflow --ignore-not-found=true
+        
+        echo "Deleting completed pods in {{.KFP_NAMESPACE}} namespace..."
+        kubectl delete pods -n {{.KFP_NAMESPACE}} --field-selector=status.phase=Succeeded --ignore-not-found=true
+        
+        echo "Deleting failed pods in {{.KFP_NAMESPACE}} namespace..."
+        kubectl delete pods -n {{.KFP_NAMESPACE}} --field-selector=status.phase=Failed --ignore-not-found=true
+        
+        echo "Deleting all Argo workflows in {{.KFP_NAMESPACE}} namespace..."
+        kubectl delete workflows -n {{.KFP_NAMESPACE}} --all --ignore-not-found=true
+                
+        echo "KFP reset complete."
 
   kind:up:
     desc: Bootstrap kind + apply kustomize overlay

@@ -1,0 +1,996 @@
+# PIPELINE DEFINITION
+# Name: kronodroid-autoencoder-training-pipeline
+# Description: Train a PyTorch Lightning autoencoder on Kronodroid syscall features with MLflow tracking and LakeFS data lineage
+# Inputs:
+#    batch_size: int [Default: 512.0]
+#    create_lakefs_tag: bool [Default: True]
+#    enable_gradient_logging: bool [Default: True]
+#    enable_resource_monitoring: bool [Default: True]
+#    enable_tensorboard: bool [Default: True]
+#    feast_feature_view: str [Default: 'malware_sample_features']
+#    feast_project: str [Default: 'dfp']
+#    feast_repo_path: str [Default: '/feast']
+#    feature_names_json: str [Default: '["syscall_1_normalized", "syscall_2_normalized", "syscall_3_normalized", "syscall_4_normalized", "syscall_5_normalized", "syscall_6_normalized", "syscall_7_normalized", "syscall_8_normalized", "syscall_9_normalized", "syscall_10_normalized", "syscall_11_normalized", "syscall_12_normalized", "syscall_13_normalized", "syscall_14_normalized", "syscall_15_normalized", "syscall_16_normalized", "syscall_17_normalized", "syscall_18_normalized", "syscall_19_normalized", "syscall_20_normalized", "syscall_total", "syscall_mean"]']
+#    hidden_dims_json: str [Default: '[128, 64]']
+#    iceberg_catalog: str [Default: 'lakefs']
+#    iceberg_database: str [Default: 'kronodroid']
+#    lakefs_endpoint: str [Default: 'http://lakefs.dfp:8000']
+#    lakefs_ref: str [Default: 'main']
+#    lakefs_repository: str [Default: 'kronodroid']
+#    lakefs_secret_name: str [Default: 'lakefs-credentials']
+#    latent_dim: int [Default: 16.0]
+#    learning_rate: float [Default: 0.001]
+#    log_every_n_steps: int [Default: 10.0]
+#    log_level: str [Default: 'INFO']
+#    max_epochs: int [Default: 10.0]
+#    max_rows_per_split: int [Default: 0.0]
+#    minio_endpoint: str [Default: 'http://minio.dfp:9000']
+#    minio_secret_name: str [Default: 'minio-credentials']
+#    mlflow_experiment_name: str [Default: 'kronodroid-autoencoder']
+#    mlflow_model_name: str [Default: 'kronodroid_autoencoder']
+#    mlflow_tracking_uri: str [Default: 'http://mlflow.dfp:5000']
+#    seed: int [Default: 1337.0]
+#    source_table: str [Default: 'fct_training_dataset']
+components:
+  comp-condition-1:
+    dag:
+      tasks:
+        lakefs-tag-model-data-op:
+          cachingOptions:
+            enableCache: true
+          componentRef:
+            name: comp-lakefs-tag-model-data-op
+          inputs:
+            parameters:
+              lakefs_commit_id:
+                componentInputParameter: pipelinechannel--train-kronodroid-autoencoder-op-lakefs_commit_id
+              lakefs_endpoint:
+                componentInputParameter: pipelinechannel--lakefs_endpoint
+              lakefs_repository:
+                componentInputParameter: pipelinechannel--lakefs_repository
+              model_name:
+                componentInputParameter: pipelinechannel--train-kronodroid-autoencoder-op-model_name
+              model_version:
+                componentInputParameter: pipelinechannel--train-kronodroid-autoencoder-op-model_version
+          taskInfo:
+            name: lakefs-tag-model-data-op
+    inputDefinitions:
+      parameters:
+        pipelinechannel--create_lakefs_tag:
+          parameterType: BOOLEAN
+        pipelinechannel--lakefs_endpoint:
+          parameterType: STRING
+        pipelinechannel--lakefs_repository:
+          parameterType: STRING
+        pipelinechannel--train-kronodroid-autoencoder-op-lakefs_commit_id:
+          parameterType: STRING
+        pipelinechannel--train-kronodroid-autoencoder-op-model_name:
+          parameterType: STRING
+        pipelinechannel--train-kronodroid-autoencoder-op-model_version:
+          parameterType: STRING
+  comp-lakefs-tag-model-data-op:
+    executorLabel: exec-lakefs-tag-model-data-op
+    inputDefinitions:
+      parameters:
+        lakefs_commit_id:
+          description: LakeFS commit ID to tag
+          parameterType: STRING
+        lakefs_endpoint:
+          description: LakeFS API endpoint URL
+          parameterType: STRING
+        lakefs_repository:
+          description: LakeFS repository name
+          parameterType: STRING
+        model_name:
+          description: Model name (used in tag name)
+          parameterType: STRING
+        model_version:
+          description: Model version (used in tag name)
+          parameterType: STRING
+    outputDefinitions:
+      parameters:
+        success:
+          parameterType: BOOLEAN
+        tag_name:
+          parameterType: STRING
+  comp-train-kronodroid-autoencoder-op:
+    executorLabel: exec-train-kronodroid-autoencoder-op
+    inputDefinitions:
+      parameters:
+        batch_size:
+          description: Training batch size
+          parameterType: NUMBER_INTEGER
+        enable_gradient_logging:
+          defaultValue: true
+          description: Log gradient statistics during training
+          isOptional: true
+          parameterType: BOOLEAN
+        enable_resource_monitoring:
+          defaultValue: true
+          description: Log memory/GPU usage metrics
+          isOptional: true
+          parameterType: BOOLEAN
+        enable_tensorboard:
+          defaultValue: true
+          description: Enable TensorBoard logging alongside MLflow
+          isOptional: true
+          parameterType: BOOLEAN
+        feast_feature_view:
+          description: Feast feature view name (for lineage)
+          parameterType: STRING
+        feast_project:
+          description: Feast project name (for lineage)
+          parameterType: STRING
+        feast_repo_path:
+          description: Path to Feast feature_store.yaml
+          parameterType: STRING
+        feature_names_json:
+          description: JSON-encoded list of feature column names
+          parameterType: STRING
+        hidden_dims_json:
+          description: JSON-encoded list of hidden layer dimensions
+          parameterType: STRING
+        iceberg_catalog:
+          description: Iceberg catalog name
+          parameterType: STRING
+        iceberg_database:
+          description: Iceberg database name
+          parameterType: STRING
+        lakefs_endpoint:
+          description: LakeFS API endpoint URL
+          parameterType: STRING
+        lakefs_ref:
+          description: LakeFS branch or commit reference
+          parameterType: STRING
+        lakefs_repository:
+          description: LakeFS repository name
+          parameterType: STRING
+        latent_dim:
+          description: Autoencoder latent dimension
+          parameterType: NUMBER_INTEGER
+        learning_rate:
+          description: Optimizer learning rate
+          parameterType: NUMBER_DOUBLE
+        log_every_n_steps:
+          defaultValue: 10.0
+          description: Log per-step metrics every N training steps
+          isOptional: true
+          parameterType: NUMBER_INTEGER
+        log_level:
+          defaultValue: INFO
+          description: Python logging level (DEBUG, INFO, WARNING, ERROR)
+          isOptional: true
+          parameterType: STRING
+        max_epochs:
+          description: Maximum training epochs
+          parameterType: NUMBER_INTEGER
+        max_rows_per_split:
+          description: Row limit per split (0 for unlimited)
+          parameterType: NUMBER_INTEGER
+        minio_endpoint:
+          defaultValue: http://minio:9000
+          description: MinIO/S3 endpoint for MLflow artifacts
+          isOptional: true
+          parameterType: STRING
+        mlflow_experiment_name:
+          description: MLflow experiment name
+          parameterType: STRING
+        mlflow_model_name:
+          description: Name for model in MLflow registry
+          parameterType: STRING
+        mlflow_tracking_uri:
+          description: MLflow tracking server URI
+          parameterType: STRING
+        seed:
+          description: Random seed for reproducibility
+          parameterType: NUMBER_INTEGER
+        source_table:
+          description: Source Iceberg table name (with dataset_split column)
+          parameterType: STRING
+    outputDefinitions:
+      parameters:
+        iceberg_snapshot_id:
+          parameterType: STRING
+        lakefs_commit_id:
+          parameterType: STRING
+        model_name:
+          parameterType: STRING
+        model_version:
+          parameterType: STRING
+        run_id:
+          parameterType: STRING
+        test_loss:
+          parameterType: NUMBER_DOUBLE
+        test_samples:
+          parameterType: NUMBER_INTEGER
+        train_samples:
+          parameterType: NUMBER_INTEGER
+        validation_samples:
+          parameterType: NUMBER_INTEGER
+deploymentSpec:
+  executors:
+    exec-lakefs-tag-model-data-op:
+      container:
+        args:
+        - --executor_input
+        - '{{$}}'
+        - --function_to_execute
+        - lakefs_tag_model_data_op
+        command:
+        - sh
+        - -c
+        - "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip ||\
+          \ python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1\
+          \ python3 -m pip install --quiet --no-warn-script-location 'kfp==2.9.0'\
+          \ '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<\"3.9\"'  &&\
+          \  python3 -m pip install --quiet --no-warn-script-location 'requests' &&\
+          \ \"$0\" \"$@\"\n"
+        - sh
+        - -ec
+        - 'program_path=$(mktemp -d)
+
+
+          printf "%s" "$0" > "$program_path/ephemeral_component.py"
+
+          _KFP_RUNTIME=true python3 -m kfp.dsl.executor_main                         --component_module_path                         "$program_path/ephemeral_component.py"                         "$@"
+
+          '
+        - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
+          \ *\n\ndef lakefs_tag_model_data_op(\n    lakefs_endpoint: str,\n    lakefs_repository:\
+          \ str,\n    lakefs_commit_id: str,\n    model_name: str,\n    model_version:\
+          \ str,\n) -> NamedTuple(\"LakeFSTagOutput\", [(\"tag_name\", str), (\"success\"\
+          , bool)]):\n    \"\"\"Create a LakeFS tag to permanently reference the training\
+          \ data version.\n\n    Following versioning-datasets.md: After successful\
+          \ training, tag the LakeFS\n    commit so the exact data version can be\
+          \ referenced for reproducibility.\n\n    Args:\n        lakefs_endpoint:\
+          \ LakeFS API endpoint URL\n        lakefs_repository: LakeFS repository\
+          \ name\n        lakefs_commit_id: LakeFS commit ID to tag\n        model_name:\
+          \ Model name (used in tag name)\n        model_version: Model version (used\
+          \ in tag name)\n\n    Returns:\n        NamedTuple with tag_name and success\
+          \ status\n    \"\"\"\n    import os\n    from collections import namedtuple\n\
+          \n    import requests\n\n    Output = namedtuple(\"LakeFSTagOutput\", [\"\
+          tag_name\", \"success\"])\n\n    access_key = os.environ.get(\"LAKEFS_ACCESS_KEY_ID\"\
+          , \"\")\n    secret_key = os.environ.get(\"LAKEFS_SECRET_ACCESS_KEY\", \"\
+          \")\n    api_base = lakefs_endpoint.rstrip(\"/\")\n    auth = (access_key,\
+          \ secret_key)\n\n    # Create tag name following versioning-datasets.md\
+          \ pattern\n    tag_name = f\"model-{model_name}-v{model_version}-data\"\n\
+          \n    print(f\"Creating LakeFS tag: {tag_name}\")\n    print(f\"  Commit:\
+          \ {lakefs_commit_id}\")\n\n    if lakefs_commit_id == \"unknown\" or not\
+          \ lakefs_commit_id:\n        print(\"Warning: No valid commit ID, skipping\
+          \ tag creation\")\n        return Output(tag_name=\"\", success=False)\n\
+          \n    try:\n        url = f\"{api_base}/api/v1/repositories/{lakefs_repository}/tags\"\
+          \n        data = {\n            \"id\": tag_name,\n            \"ref\":\
+          \ lakefs_commit_id,\n        }\n        resp = requests.post(url, json=data,\
+          \ auth=auth)\n\n        if resp.status_code in (200, 201):\n           \
+          \ print(f\"Created tag: {tag_name}\")\n            return Output(tag_name=tag_name,\
+          \ success=True)\n        elif resp.status_code == 409:\n            print(f\"\
+          Tag already exists: {tag_name}\")\n            return Output(tag_name=tag_name,\
+          \ success=True)\n        else:\n            print(f\"Failed to create tag:\
+          \ {resp.status_code} - {resp.text}\")\n            return Output(tag_name=\"\
+          \", success=False)\n\n    except Exception as e:\n        print(f\"Error\
+          \ creating tag: {e}\")\n        return Output(tag_name=\"\", success=False)\n\
+          \n"
+        image: python:3.11-slim
+        resources:
+          cpuLimit: 0.5
+          memoryLimit: 0.268435456
+    exec-train-kronodroid-autoencoder-op:
+      container:
+        args:
+        - --executor_input
+        - '{{$}}'
+        - --function_to_execute
+        - train_kronodroid_autoencoder_op
+        command:
+        - sh
+        - -c
+        - "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip ||\
+          \ python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1\
+          \ python3 -m pip install --quiet --no-warn-script-location 'kfp==2.9.0'\
+          \ '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<\"3.9\"' && \"\
+          $0\" \"$@\"\n"
+        - sh
+        - -ec
+        - 'program_path=$(mktemp -d)
+
+
+          printf "%s" "$0" > "$program_path/ephemeral_component.py"
+
+          _KFP_RUNTIME=true python3 -m kfp.dsl.executor_main                         --component_module_path                         "$program_path/ephemeral_component.py"                         "$@"
+
+          '
+        - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
+          \ *\n\ndef train_kronodroid_autoencoder_op(\n    # MLflow config\n    mlflow_tracking_uri:\
+          \ str,\n    mlflow_experiment_name: str,\n    mlflow_model_name: str,\n\
+          \    # Data config - LakeFS/Iceberg for lineage\n    lakefs_endpoint: str,\n\
+          \    lakefs_repository: str,\n    lakefs_ref: str,\n    iceberg_catalog:\
+          \ str,\n    iceberg_database: str,\n    source_table: str,\n    # Feast\
+          \ config for data loading\n    feast_repo_path: str,\n    feast_project:\
+          \ str,\n    feast_feature_view: str,\n    feature_names_json: str,\n   \
+          \ # Model config\n    latent_dim: int,\n    hidden_dims_json: str,\n   \
+          \ # Training config\n    batch_size: int,\n    max_epochs: int,\n    learning_rate:\
+          \ float,\n    seed: int,\n    max_rows_per_split: int,\n    # MLflow artifact\
+          \ storage (S3/MinIO)\n    minio_endpoint: str = \"http://minio:9000\",\n\
+          \    # Logging and monitoring config\n    log_level: str = \"INFO\",\n \
+          \   enable_tensorboard: bool = True,\n    log_every_n_steps: int = 10,\n\
+          \    enable_gradient_logging: bool = True,\n    enable_resource_monitoring:\
+          \ bool = True,\n) -> NamedTuple(\n    \"TrainAutoencoderOutput\",\n    [\n\
+          \        (\"run_id\", str),\n        (\"model_name\", str),\n        (\"\
+          model_version\", str),\n        (\"test_loss\", float),\n        (\"lakefs_commit_id\"\
+          , str),\n        (\"iceberg_snapshot_id\", str),\n        (\"train_samples\"\
+          , int),\n        (\"validation_samples\", int),\n        (\"test_samples\"\
+          , int),\n    ],\n):\n    \"\"\"Train, validate, test, and register a Kronodroid\
+          \ autoencoder model.\n\n    This component orchestrates the full training\
+          \ workflow following the\n    versioning-datasets.md lineage pattern:\n\n\
+          \    1. Resolves LakeFS ref to exact commit ID for reproducibility\n   \
+          \ 2. Loads train/validation/test data using dataset_split column\n    3.\
+          \ Trains PyTorch Lightning autoencoder with comprehensive monitoring\n \
+          \   4. Logs all lineage parameters to MLflow (LakeFS commit, Feast view,\
+          \ etc.)\n    5. Registers model in MLflow Model Registry\n\n    Data Lineage\
+          \ Parameters Logged:\n    - lakefs_repository, lakefs_ref, lakefs_commit_id:\
+          \ Exact data version\n    - feast_project, feast_feature_view: Feature engineering\
+          \ version\n    - iceberg_table: Source table reference\n    - train/val/test_samples:\
+          \ Dataset statistics\n\n    Args:\n        mlflow_tracking_uri: MLflow tracking\
+          \ server URI\n        mlflow_experiment_name: MLflow experiment name\n \
+          \       mlflow_model_name: Name for model in MLflow registry\n        lakefs_endpoint:\
+          \ LakeFS API endpoint URL\n        lakefs_repository: LakeFS repository\
+          \ name\n        lakefs_ref: LakeFS branch or commit reference\n        iceberg_catalog:\
+          \ Iceberg catalog name\n        iceberg_database: Iceberg database name\n\
+          \        source_table: Source Iceberg table name (with dataset_split column)\n\
+          \        feast_repo_path: Path to Feast feature_store.yaml\n        feast_project:\
+          \ Feast project name (for lineage)\n        feast_feature_view: Feast feature\
+          \ view name (for lineage)\n        feature_names_json: JSON-encoded list\
+          \ of feature column names\n        latent_dim: Autoencoder latent dimension\n\
+          \        hidden_dims_json: JSON-encoded list of hidden layer dimensions\n\
+          \        batch_size: Training batch size\n        max_epochs: Maximum training\
+          \ epochs\n        learning_rate: Optimizer learning rate\n        seed:\
+          \ Random seed for reproducibility\n        max_rows_per_split: Row limit\
+          \ per split (0 for unlimited)\n        minio_endpoint: MinIO/S3 endpoint\
+          \ for MLflow artifacts\n        log_level: Python logging level (DEBUG,\
+          \ INFO, WARNING, ERROR)\n        enable_tensorboard: Enable TensorBoard\
+          \ logging alongside MLflow\n        log_every_n_steps: Log per-step metrics\
+          \ every N training steps\n        enable_gradient_logging: Log gradient\
+          \ statistics during training\n        enable_resource_monitoring: Log memory/GPU\
+          \ usage metrics\n\n    Returns:\n        NamedTuple with run info, model\
+          \ info, metrics, and lineage\n    \"\"\"\n    import json\n    import logging\n\
+          \    import os\n    import sys\n    import tempfile\n    import time\n \
+          \   from collections import namedtuple\n    from datetime import datetime\n\
+          \    from typing import Any, Dict, List, Optional, Tuple\n\n    import mlflow\n\
+          \    import mlflow.pytorch\n    import lightning as L\n    import numpy\
+          \ as np\n    import pandas as pd\n    import psutil\n    import requests\n\
+          \    import torch\n    from torch import nn\n    from torch.utils.data import\
+          \ Dataset, DataLoader\n    from lightning.pytorch.callbacks import (\n \
+          \       Callback,\n        ModelCheckpoint,\n        EarlyStopping,\n  \
+          \      LearningRateMonitor,\n    )\n    from lightning.pytorch.loggers import\
+          \ MLFlowLogger, TensorBoardLogger\n\n    # --- Setup logging ---\n    def\
+          \ setup_logging(level: str) -> logging.Logger:\n        \"\"\"Configure\
+          \ logging with the specified level.\"\"\"\n        numeric_level = getattr(logging,\
+          \ level.upper(), logging.INFO)\n\n        logging.basicConfig(\n       \
+          \     level=numeric_level,\n            format=\"%(asctime)s | %(levelname)-8s\
+          \ | %(name)s | %(message)s\",\n            datefmt=\"%Y-%m-%d %H:%M:%S\"\
+          ,\n            handlers=[logging.StreamHandler(sys.stdout)],\n        )\n\
+          \n        logger = logging.getLogger(\"kronodroid-autoencoder\")\n     \
+          \   logger.setLevel(numeric_level)\n\n        # Reduce noise from other\
+          \ libraries\n        logging.getLogger(\"pyspark\").setLevel(logging.WARNING)\n\
+          \        logging.getLogger(\"py4j\").setLevel(logging.WARNING)\n       \
+          \ logging.getLogger(\"urllib3\").setLevel(logging.WARNING)\n\n        return\
+          \ logger\n\n    logger = setup_logging(log_level)\n\n    Output = namedtuple(\n\
+          \        \"TrainAutoencoderOutput\",\n        [\n            \"run_id\"\
+          ,\n            \"model_name\",\n            \"model_version\",\n       \
+          \     \"test_loss\",\n            \"lakefs_commit_id\",\n            \"\
+          iceberg_snapshot_id\",\n            \"train_samples\",\n            \"validation_samples\"\
+          ,\n            \"test_samples\",\n        ],\n    )\n\n    # Parse JSON\
+          \ inputs\n    feature_names = json.loads(feature_names_json)\n    hidden_dims\
+          \ = tuple(json.loads(hidden_dims_json))\n    max_rows = max_rows_per_split\
+          \ if max_rows_per_split > 0 else None\n\n    # Set MLflow S3 endpoint for\
+          \ artifact storage\n    os.environ[\"MLFLOW_S3_ENDPOINT_URL\"] = minio_endpoint\n\
+          \n    # Set LakeFS endpoint for Spark/Feast config variable substitution\n\
+          \    os.environ[\"LAKEFS_ENDPOINT_URL\"] = lakefs_endpoint\n\n    logger.info(\"\
+          =\" * 60)\n    logger.info(\"Kronodroid Autoencoder Training\")\n    logger.info(\"\
+          =\" * 60)\n    logger.info(f\"MLflow URI: {mlflow_tracking_uri}\")\n   \
+          \ logger.info(f\"Experiment: {mlflow_experiment_name}\")\n    logger.info(f\"\
+          Model: {mlflow_model_name}\")\n    logger.info(f\"LakeFS: {lakefs_repository}@{lakefs_ref}\"\
+          )\n    logger.info(f\"Table: {iceberg_catalog}.{iceberg_database}.{source_table}\"\
+          )\n    logger.info(f\"Features: {len(feature_names)}\")\n    logger.info(f\"\
+          Architecture: {len(feature_names)} -> {hidden_dims} -> {latent_dim}\")\n\
+          \    logger.info(f\"Training: batch_size={batch_size}, max_epochs={max_epochs},\
+          \ lr={learning_rate}\")\n    logger.info(\"=\" * 60)\n\n    # --- Custom\
+          \ Callbacks for Monitoring ---\n\n    class ResourceMonitorCallback(Callback):\n\
+          \        \"\"\"Monitor system resources during training.\"\"\"\n\n     \
+          \   def __init__(self, log_every_n_steps: int = 10):\n            super().__init__()\n\
+          \            self.log_every_n_steps = log_every_n_steps\n\n        def _get_memory_stats(self)\
+          \ -> Dict[str, float]:\n            stats = {}\n            process = psutil.Process()\n\
+          \            mem_info = process.memory_info()\n            stats[\"memory_rss_mb\"\
+          ] = mem_info.rss / (1024 * 1024)\n            stats[\"memory_percent\"]\
+          \ = process.memory_percent()\n            sys_mem = psutil.virtual_memory()\n\
+          \            stats[\"system_memory_percent\"] = sys_mem.percent\n\n    \
+          \        if torch.cuda.is_available():\n                for i in range(torch.cuda.device_count()):\n\
+          \                    allocated = torch.cuda.memory_allocated(i) / (1024\
+          \ * 1024)\n                    stats[f\"gpu_{i}_allocated_mb\"] = allocated\n\
+          \n            return stats\n\n        def on_train_batch_end(self, trainer,\
+          \ pl_module, outputs, batch, batch_idx):\n            if batch_idx % self.log_every_n_steps\
+          \ == 0:\n                stats = self._get_memory_stats()\n            \
+          \    for key, value in stats.items():\n                    pl_module.log(f\"\
+          resource/{key}\", value, on_step=True, on_epoch=False)\n\n        def on_train_epoch_end(self,\
+          \ trainer, pl_module):\n            stats = self._get_memory_stats()\n \
+          \           for key, value in stats.items():\n                pl_module.log(f\"\
+          resource/{key}\", value, on_step=False, on_epoch=True)\n\n    class GradientMonitorCallback(Callback):\n\
+          \        \"\"\"Monitor gradient statistics during training.\"\"\"\n\n  \
+          \      def __init__(self, log_every_n_steps: int = 10):\n            super().__init__()\n\
+          \            self.log_every_n_steps = log_every_n_steps\n\n        def on_after_backward(self,\
+          \ trainer, pl_module):\n            if trainer.global_step % self.log_every_n_steps\
+          \ == 0:\n                grad_norms = []\n                grad_values =\
+          \ []\n\n                for name, param in pl_module.named_parameters():\n\
+          \                    if param.grad is not None:\n                      \
+          \  grad_norm = param.grad.norm().item()\n                        grad_norms.append(grad_norm)\n\
+          \                        grad_values.extend(param.grad.flatten().tolist()[:100])\n\
+          \n                if grad_norms:\n                    pl_module.log(\"gradient/norm_mean\"\
+          , np.mean(grad_norms), on_step=True, on_epoch=False)\n                 \
+          \   pl_module.log(\"gradient/norm_max\", np.max(grad_norms), on_step=True,\
+          \ on_epoch=False)\n\n                if grad_values:\n                 \
+          \   pl_module.log(\"gradient/value_std\", np.std(grad_values), on_step=True,\
+          \ on_epoch=False)\n\n    class TrainingProgressCallback(Callback):\n   \
+          \     \"\"\"Log training progress with timing and throughput.\"\"\"\n\n\
+          \        def __init__(self):\n            super().__init__()\n         \
+          \   self.epoch_start_time = None\n            self.training_start_time =\
+          \ None\n            self.epoch_samples = 0\n            self.total_samples\
+          \ = 0\n\n        def on_train_start(self, trainer, pl_module):\n       \
+          \     self.training_start_time = time.time()\n            logger.info(\"\
+          Training started\")\n\n        def on_train_epoch_start(self, trainer, pl_module):\n\
+          \            self.epoch_start_time = time.time()\n            self.epoch_samples\
+          \ = 0\n            logger.info(f\"Epoch {trainer.current_epoch + 1}/{trainer.max_epochs}\
+          \ started\")\n\n        def on_train_batch_end(self, trainer, pl_module,\
+          \ outputs, batch, batch_idx):\n            batch_size = batch.shape[0] if\
+          \ hasattr(batch, \"shape\") else len(batch)\n            self.epoch_samples\
+          \ += batch_size\n            self.total_samples += batch_size\n\n      \
+          \  def on_train_epoch_end(self, trainer, pl_module):\n            epoch_time\
+          \ = time.time() - self.epoch_start_time\n            total_time = time.time()\
+          \ - self.training_start_time\n            samples_per_second = self.epoch_samples\
+          \ / epoch_time if epoch_time > 0 else 0\n\n            pl_module.log(\"\
+          timing/epoch_seconds\", epoch_time, on_step=False, on_epoch=True)\n    \
+          \        pl_module.log(\"timing/total_seconds\", total_time, on_step=False,\
+          \ on_epoch=True)\n            pl_module.log(\"throughput/samples_per_second\"\
+          , samples_per_second, on_step=False, on_epoch=True)\n\n            train_loss\
+          \ = trainer.callback_metrics.get(\"train_loss\", 0)\n            val_loss\
+          \ = trainer.callback_metrics.get(\"val_loss\", 0)\n\n            logger.info(\n\
+          \                f\"Epoch {trainer.current_epoch + 1} | \"\n           \
+          \     f\"train_loss={train_loss:.6f} | val_loss={val_loss:.6f} | \"\n  \
+          \              f\"time={epoch_time:.1f}s | throughput={samples_per_second:.0f}/s\"\
+          \n            )\n\n        def on_train_end(self, trainer, pl_module):\n\
+          \            total_time = time.time() - self.training_start_time\n     \
+          \       logger.info(f\"Training completed in {total_time:.1f}s | Total samples:\
+          \ {self.total_samples}\")\n\n    # --- LightningAutoencoder class ---\n\
+          \    class LightningAutoencoder(L.LightningModule):\n        def __init__(\n\
+          \            self,\n            input_dim: int,\n            latent_dim:\
+          \ int,\n            hidden_dims: Tuple[int, ...],\n            lr: float,\n\
+          \        ):\n            super().__init__()\n            self.save_hyperparameters()\n\
+          \            self.lr = lr\n\n            # Build encoder\n            encoder_layers\
+          \ = []\n            prev_dim = input_dim\n            for h_dim in hidden_dims:\n\
+          \                encoder_layers.extend([\n                    nn.Linear(prev_dim,\
+          \ h_dim),\n                    nn.ReLU(),\n                    nn.BatchNorm1d(h_dim),\n\
+          \                ])\n                prev_dim = h_dim\n            encoder_layers.append(nn.Linear(prev_dim,\
+          \ latent_dim))\n            self.encoder = nn.Sequential(*encoder_layers)\n\
+          \n            # Build decoder\n            decoder_layers = []\n       \
+          \     prev_dim = latent_dim\n            for h_dim in reversed(hidden_dims):\n\
+          \                decoder_layers.extend([\n                    nn.Linear(prev_dim,\
+          \ h_dim),\n                    nn.ReLU(),\n                    nn.BatchNorm1d(h_dim),\n\
+          \                ])\n                prev_dim = h_dim\n            decoder_layers.append(nn.Linear(prev_dim,\
+          \ input_dim))\n            self.decoder = nn.Sequential(*decoder_layers)\n\
+          \n            self.loss_fn = nn.MSELoss()\n            self.mae_fn = nn.L1Loss()\n\
+          \n        def forward(self, x):\n            return self.decoder(self.encoder(x))\n\
+          \n        def encode(self, x):\n            return self.encoder(x)\n\n \
+          \       def _shared_step(self, batch, stage):\n            x_hat = self(batch)\n\
+          \            mse_loss = self.loss_fn(x_hat, batch)\n            mae_loss\
+          \ = self.mae_fn(x_hat, batch)\n\n            self.log(f\"{stage}_loss\"\
+          , mse_loss, prog_bar=True, on_epoch=True, on_step=(stage == \"train\"))\n\
+          \            self.log(f\"{stage}_mse\", mse_loss, on_epoch=True, on_step=False)\n\
+          \            self.log(f\"{stage}_mae\", mae_loss, on_epoch=True, on_step=False)\n\
+          \n            if stage == \"val\":\n                with torch.no_grad():\n\
+          \                    per_feature_mse = ((x_hat - batch) ** 2).mean(dim=0)\n\
+          \                    self.log(f\"{stage}_max_feature_error\", per_feature_mse.max(),\
+          \ on_epoch=True)\n                    self.log(f\"{stage}_min_feature_error\"\
+          , per_feature_mse.min(), on_epoch=True)\n\n            return mse_loss\n\
+          \n        def training_step(self, batch, batch_idx):\n            loss =\
+          \ self._shared_step(batch, \"train\")\n            if batch_idx % log_every_n_steps\
+          \ == 0:\n                self.log(\"train_batch_loss\", loss, on_step=True,\
+          \ on_epoch=False)\n            return loss\n\n        def validation_step(self,\
+          \ batch, batch_idx):\n            return self._shared_step(batch, \"val\"\
+          )\n\n        def test_step(self, batch, batch_idx):\n            loss =\
+          \ self._shared_step(batch, \"test\")\n            with torch.no_grad():\n\
+          \                x_hat = self(batch)\n                sample_errors = ((x_hat\
+          \ - batch) ** 2).mean(dim=1)\n                self.log(\"test_error_mean\"\
+          , sample_errors.mean(), on_epoch=True)\n                self.log(\"test_error_std\"\
+          , sample_errors.std(), on_epoch=True)\n                self.log(\"test_error_max\"\
+          , sample_errors.max(), on_epoch=True)\n            return loss\n\n     \
+          \   def configure_optimizers(self):\n            optimizer = torch.optim.Adam(self.parameters(),\
+          \ lr=self.lr)\n            scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(\n\
+          \                optimizer, mode=\"min\", factor=0.5, patience=2, verbose=True\n\
+          \            )\n            return {\n                \"optimizer\": optimizer,\n\
+          \                \"lr_scheduler\": {\n                    \"scheduler\"\
+          : scheduler,\n                    \"monitor\": \"val_loss\",\n         \
+          \           \"interval\": \"epoch\",\n                    \"frequency\"\
+          : 1,\n                },\n            }\n\n    # --- Dataset class ---\n\
+          \    class AutoencoderDataset(Dataset):\n        def __init__(self, df:\
+          \ pd.DataFrame, columns: List[str], mean=None, std=None):\n            data\
+          \ = df[columns].values.astype(np.float32)\n            data = np.nan_to_num(data,\
+          \ nan=0.0)\n\n            if mean is None:\n                self.mean =\
+          \ data.mean(axis=0)\n                self.std = data.std(axis=0) + 1e-8\n\
+          \            else:\n                self.mean = mean\n                self.std\
+          \ = std\n\n            self.data = torch.from_numpy((data - self.mean) /\
+          \ self.std)\n\n        def __len__(self):\n            return len(self.data)\n\
+          \n        def __getitem__(self, idx):\n            return self.data[idx]\n\
+          \n    # --- Get LakeFS commit info for lineage ---\n    def get_lakefs_commit_id(endpoint:\
+          \ str, repo: str, ref: str) -> str:\n        \"\"\"Resolve LakeFS ref to\
+          \ exact commit ID for reproducibility.\"\"\"\n        access_key = os.environ.get(\"\
+          LAKEFS_ACCESS_KEY_ID\", \"\")\n        secret_key = os.environ.get(\"LAKEFS_SECRET_ACCESS_KEY\"\
+          , \"\")\n        api_base = endpoint.rstrip(\"/\")\n\n        try:\n   \
+          \         url = f\"{api_base}/api/v1/repositories/{repo}/refs/{ref}\"\n\
+          \            resp = requests.get(url, auth=(access_key, secret_key), timeout=10)\n\
+          \            if resp.status_code == 200:\n                return resp.json().get(\"\
+          commit_id\", \"unknown\")\n        except Exception as e:\n            logger.warning(f\"\
+          Could not resolve LakeFS ref: {e}\")\n\n        return \"unknown\"\n\n \
+          \   # --- Load data from Feast ---\n    def load_data_from_feast(\n    \
+          \    feast_repo_path: str,\n        iceberg_table: str,\n        feature_columns:\
+          \ List[str],\n        max_rows: Optional[int],\n    ) -> Tuple[Dict[str,\
+          \ pd.DataFrame], Dict[str, any]]:\n        \"\"\"Load training data from\
+          \ Feast offline store (Iceberg via Spark).\"\"\"\n        from pathlib import\
+          \ Path\n        from pyspark.sql import SparkSession\n        import yaml\n\
+          \        import re\n\n        feast_config_path = Path(feast_repo_path)\
+          \ / \"feature_store.yaml\"\n        logger.info(f\"Loading Feast config\
+          \ from: {feast_config_path}\")\n\n        with open(feast_config_path) as\
+          \ f:\n            feast_config = yaml.safe_load(f)\n\n        spark_conf\
+          \ = feast_config.get(\"offline_store\", {}).get(\"spark_conf\", {})\n  \
+          \      logger.info(\"Creating Spark session with Iceberg config from Feast\"\
+          )\n\n        builder = SparkSession.builder.appName(\"kronodroid-training\"\
+          )\n        for key, value in spark_conf.items():\n            if isinstance(value,\
+          \ str) and \"${\" in value:\n                for match in re.finditer(r'\\\
+          $\\{(\\w+)\\}', value):\n                    env_var = match.group(1)\n\
+          \                    env_val = os.environ.get(env_var, \"\")\n         \
+          \           value = value.replace(f\"${{{env_var}}}\", env_val)\n      \
+          \      builder = builder.config(key, str(value))\n\n        spark_session\
+          \ = builder.getOrCreate()\n        logger.info(f\"Reading from Iceberg table:\
+          \ {iceberg_table}\")\n\n        spark_df = spark_session.read.table(iceberg_table)\n\
+          \        select_cols = [\"sample_id\", \"dataset_split\"] + feature_columns\n\
+          \        available = [c for c in select_cols if c in spark_df.columns]\n\
+          \        spark_df = spark_df.select(*available)\n\n        df = spark_df.toPandas()\n\
+          \        logger.info(f\"Retrieved {len(df):,} total samples\")\n\n     \
+          \   # Split by dataset_split column (following versioning-datasets.md pattern)\n\
+          \        splits = {}\n        counts = {}\n        for split_name in [\"\
+          train\", \"validation\", \"test\"]:\n            split_df = df[df[\"dataset_split\"\
+          ] == split_name].copy()\n            if max_rows and len(split_df) > max_rows:\n\
+          \                split_df = split_df.head(max_rows)\n            splits[split_name]\
+          \ = split_df\n            counts[f\"{split_name}_samples\"] = len(split_df)\n\
+          \            logger.info(f\"  {split_name}: {len(split_df):,} samples\"\
+          )\n\n        # Get Iceberg snapshot ID for lineage\n        iceberg_snapshot_id\
+          \ = \"\"\n        try:\n            snapshot_df = spark_session.sql(\n \
+          \               f\"SELECT snapshot_id FROM {iceberg_table}.snapshots ORDER\
+          \ BY committed_at DESC LIMIT 1\"\n            )\n            snapshot_row\
+          \ = snapshot_df.first()\n            if snapshot_row:\n                iceberg_snapshot_id\
+          \ = str(snapshot_row[\"snapshot_id\"])\n        except Exception as e:\n\
+          \            logger.warning(f\"Could not get Iceberg snapshot ID: {e}\"\
+          )\n\n        lineage_info = {\n            \"iceberg_table\": iceberg_table,\n\
+          \            \"iceberg_snapshot_id\": iceberg_snapshot_id,\n           \
+          \ \"data_source\": \"feast_spark_iceberg\",\n            **counts,\n   \
+          \     }\n\n        spark_session.stop()\n        return splits, lineage_info\n\
+          \n    # --- Main training logic ---\n\n    training_start_time = time.time()\n\
+          \    logger.info(\"Initializing training pipeline...\")\n\n    # Set seed\
+          \ for reproducibility\n    L.seed_everything(seed)\n\n    # Get LakeFS commit\
+          \ ID for lineage (per versioning-datasets.md)\n    logger.info(\"Resolving\
+          \ LakeFS ref to commit ID for lineage...\")\n    lakefs_commit_id = get_lakefs_commit_id(lakefs_endpoint,\
+          \ lakefs_repository, lakefs_ref)\n    logger.info(f\"LakeFS commit: {lakefs_commit_id}\"\
+          )\n\n    # Load data from Feast (Iceberg via Spark)\n    iceberg_table_full\
+          \ = f\"{iceberg_catalog}.{iceberg_database}.{source_table}\"\n    logger.info(\"\
+          Loading data from Feast offline store (Iceberg via Spark)...\")\n    data_load_start\
+          \ = time.time()\n    splits, data_info = load_data_from_feast(\n       \
+          \ feast_repo_path=feast_repo_path,\n        iceberg_table=iceberg_table_full,\n\
+          \        feature_columns=feature_names,\n        max_rows=max_rows,\n  \
+          \  )\n    data_load_time = time.time() - data_load_start\n    logger.info(f\"\
+          Data loading completed in {data_load_time:.1f}s\")\n\n    # Create datasets\n\
+          \    logger.info(\"Creating PyTorch datasets...\")\n    train_ds = AutoencoderDataset(splits[\"\
+          train\"], feature_names)\n    val_ds = AutoencoderDataset(splits[\"validation\"\
+          ], feature_names, train_ds.mean, train_ds.std)\n    test_ds = AutoencoderDataset(splits[\"\
+          test\"], feature_names, train_ds.mean, train_ds.std)\n\n    # Create dataloaders\n\
+          \    train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True,\
+          \ num_workers=2)\n    val_loader = DataLoader(val_ds, batch_size=batch_size,\
+          \ shuffle=False, num_workers=2)\n    test_loader = DataLoader(test_ds, batch_size=batch_size,\
+          \ shuffle=False, num_workers=2)\n\n    logger.info(f\"Train batches: {len(train_loader)},\
+          \ Val: {len(val_loader)}, Test: {len(test_loader)}\")\n\n    # Create model\n\
+          \    logger.info(\"Initializing model...\")\n    model = LightningAutoencoder(\n\
+          \        input_dim=len(feature_names),\n        latent_dim=latent_dim,\n\
+          \        hidden_dims=hidden_dims,\n        lr=learning_rate,\n    )\n\n\
+          \    total_params = sum(p.numel() for p in model.parameters())\n    trainable_params\
+          \ = sum(p.numel() for p in model.parameters() if p.requires_grad)\n    logger.info(f\"\
+          Model parameters: {total_params:,} total, {trainable_params:,} trainable\"\
+          )\n\n    # Setup MLflow\n    logger.info(\"Setting up MLflow tracking...\"\
+          )\n    mlflow.set_tracking_uri(mlflow_tracking_uri)\n    mlflow.set_experiment(mlflow_experiment_name)\n\
+          \n    with mlflow.start_run() as run:\n        run_id = run.info.run_id\n\
+          \        logger.info(f\"MLflow run ID: {run_id}\")\n\n        # Log comprehensive\
+          \ lineage parameters (per versioning-datasets.md)\n        mlflow.log_params({\n\
+          \            # LakeFS data version (primary lineage)\n            \"data/lakefs_repository\"\
+          : lakefs_repository,\n            \"data/lakefs_ref\": lakefs_ref,\n   \
+          \         \"data/lakefs_commit\": lakefs_commit_id,\n            # Iceberg\
+          \ table reference\n            \"data/iceberg_table\": iceberg_table_full,\n\
+          \            \"data/iceberg_snapshot_id\": data_info.get(\"iceberg_snapshot_id\"\
+          , \"\"),\n            # Feast feature store reference\n            \"data/feast_project\"\
+          : feast_project,\n            \"data/feast_feature_view\": feast_feature_view,\n\
+          \            \"data/feast_repo_path\": feast_repo_path,\n            # Split\
+          \ statistics\n            \"data/train_samples\": data_info.get(\"train_samples\"\
+          ),\n            \"data/validation_samples\": data_info.get(\"validation_samples\"\
+          ),\n            \"data/test_samples\": data_info.get(\"test_samples\"),\n\
+          \            # Feature names\n            \"data/feature_names\": json.dumps(feature_names),\n\
+          \        })\n\n        # Log model hyperparameters\n        mlflow.log_params({\n\
+          \            \"model/input_dim\": len(feature_names),\n            \"model/latent_dim\"\
+          : latent_dim,\n            \"model/hidden_dims\": str(hidden_dims),\n  \
+          \          \"model/total_parameters\": total_params,\n            \"model/trainable_parameters\"\
+          : trainable_params,\n        })\n\n        # Log training config\n     \
+          \   mlflow.log_params({\n            \"training/batch_size\": batch_size,\n\
+          \            \"training/max_epochs\": max_epochs,\n            \"training/learning_rate\"\
+          : learning_rate,\n            \"training/seed\": seed,\n        })\n\n \
+          \       mlflow.log_metric(\"data_load_time_seconds\", data_load_time)\n\n\
+          \        # Setup loggers\n        loggers = []\n\n        mlflow_logger\
+          \ = MLFlowLogger(\n            experiment_name=mlflow_experiment_name,\n\
+          \            tracking_uri=mlflow_tracking_uri,\n            run_id=run_id,\n\
+          \        )\n        loggers.append(mlflow_logger)\n\n        tensorboard_dir\
+          \ = None\n        if enable_tensorboard:\n            tensorboard_dir =\
+          \ tempfile.mkdtemp(prefix=\"tensorboard_\")\n            tb_logger = TensorBoardLogger(\n\
+          \                save_dir=tensorboard_dir,\n                name=\"kronodroid_autoencoder\"\
+          ,\n                version=run_id[:8],\n            )\n            loggers.append(tb_logger)\n\
+          \n        # Setup callbacks\n        callbacks = [\n            ModelCheckpoint(\n\
+          \                monitor=\"val_loss\",\n                mode=\"min\",\n\
+          \                save_top_k=1,\n                filename=\"best-{epoch:02d}-{val_loss:.4f}\"\
+          ,\n                verbose=True,\n            ),\n            EarlyStopping(\n\
+          \                monitor=\"val_loss\",\n                patience=3,\n  \
+          \              mode=\"min\",\n                verbose=True,\n          \
+          \  ),\n            LearningRateMonitor(logging_interval=\"epoch\"),\n  \
+          \          TrainingProgressCallback(),\n        ]\n\n        if enable_resource_monitoring:\n\
+          \            callbacks.append(ResourceMonitorCallback(log_every_n_steps=log_every_n_steps))\n\
+          \n        if enable_gradient_logging:\n            callbacks.append(GradientMonitorCallback(log_every_n_steps=log_every_n_steps))\n\
+          \n        # Create trainer\n        trainer = L.Trainer(\n            max_epochs=max_epochs,\n\
+          \            logger=loggers,\n            callbacks=callbacks,\n       \
+          \     enable_progress_bar=True,\n            log_every_n_steps=log_every_n_steps,\n\
+          \            deterministic=True,\n        )\n\n        # Train\n       \
+          \ logger.info(\"=\" * 60)\n        logger.info(\"STARTING TRAINING\")\n\
+          \        logger.info(\"=\" * 60)\n        fit_start_time = time.time()\n\
+          \        trainer.fit(model, train_loader, val_loader)\n        fit_time\
+          \ = time.time() - fit_start_time\n        logger.info(f\"Training completed\
+          \ in {fit_time:.1f}s\")\n\n        mlflow.log_metric(\"fit_time_seconds\"\
+          , fit_time)\n\n        # Test\n        logger.info(\"=\" * 60)\n       \
+          \ logger.info(\"RUNNING TEST EVALUATION\")\n        logger.info(\"=\" *\
+          \ 60)\n        test_start_time = time.time()\n        test_results = trainer.test(model,\
+          \ test_loader)\n        test_time = time.time() - test_start_time\n\n  \
+          \      test_loss = float(test_results[0][\"test_loss\"])\n        logger.info(f\"\
+          Test Loss (MSE): {test_loss:.6f}\")\n\n        mlflow.log_metric(\"test_loss\"\
+          , test_loss)\n        mlflow.log_metric(\"test_time_seconds\", test_time)\n\
+          \n        for key, value in test_results[0].items():\n            if key\
+          \ != \"test_loss\":\n                mlflow.log_metric(key, float(value))\n\
+          \n        # Save normalization params\n        with tempfile.NamedTemporaryFile(mode=\"\
+          w\", suffix=\".json\", delete=False) as f:\n            json.dump({\n  \
+          \              \"mean\": train_ds.mean.tolist(),\n                \"std\"\
+          : train_ds.std.tolist(),\n                \"feature_names\": feature_names,\n\
+          \            }, f)\n            mlflow.log_artifact(f.name, \"normalization\"\
+          )\n            os.unlink(f.name)\n\n        # Save TensorBoard logs\n  \
+          \      if enable_tensorboard and tensorboard_dir:\n            mlflow.log_artifacts(tensorboard_dir,\
+          \ \"tensorboard\")\n\n        # Log training summary\n        total_time\
+          \ = time.time() - training_start_time\n        mlflow.log_metric(\"total_time_seconds\"\
+          , total_time)\n        mlflow.log_metric(\"best_val_loss\", float(trainer.checkpoint_callback.best_model_score))\n\
+          \n        logger.info(\"=\" * 60)\n        logger.info(\"TRAINING SUMMARY\"\
+          )\n        logger.info(\"=\" * 60)\n        logger.info(f\"Total time: {total_time:.1f}s\"\
+          )\n        logger.info(f\"Test loss: {test_loss:.6f}\")\n        logger.info(f\"\
+          Best val loss: {trainer.checkpoint_callback.best_model_score:.6f}\")\n\n\
+          \        # Register model\n        logger.info(\"=\" * 60)\n        logger.info(\"\
+          REGISTERING MODEL\")\n        logger.info(\"=\" * 60)\n        mlflow.pytorch.log_model(\n\
+          \            model,\n            \"model\",\n            registered_model_name=mlflow_model_name,\n\
+          \            pip_requirements=[\"torch>=2.0\", \"lightning>=2.0\"],\n  \
+          \      )\n\n        mlflow_client = mlflow.tracking.MlflowClient()\n   \
+          \     versions = mlflow_client.search_model_versions(f\"name='{mlflow_model_name}'\"\
+          )\n        model_version = str(max([int(v.version) for v in versions]))\
+          \ if versions else \"1\"\n        logger.info(f\"Registered as {mlflow_model_name}\
+          \ v{model_version}\")\n\n        # Cleanup\n        if tensorboard_dir:\n\
+          \            import shutil\n            shutil.rmtree(tensorboard_dir, ignore_errors=True)\n\
+          \n    return Output(\n        run_id=run_id,\n        model_name=mlflow_model_name,\n\
+          \        model_version=model_version,\n        test_loss=test_loss,\n  \
+          \      lakefs_commit_id=lakefs_commit_id,\n        iceberg_snapshot_id=data_info.get(\"\
+          iceberg_snapshot_id\", \"\"),\n        train_samples=data_info.get(\"train_samples\"\
+          , 0),\n        validation_samples=data_info.get(\"validation_samples\",\
+          \ 0),\n        test_samples=data_info.get(\"test_samples\", 0),\n    )\n\
+          \n"
+        image: dfp-autoencoder-train:v4
+        resources:
+          cpuLimit: 4.0
+          cpuRequest: 2.0
+          memoryLimit: 8.589934592
+          memoryRequest: 4.294967296
+pipelineInfo:
+  description: Train a PyTorch Lightning autoencoder on Kronodroid syscall features
+    with MLflow tracking and LakeFS data lineage
+  name: kronodroid-autoencoder-training-pipeline
+root:
+  dag:
+    tasks:
+      condition-1:
+        componentRef:
+          name: comp-condition-1
+        dependentTasks:
+        - train-kronodroid-autoencoder-op
+        inputs:
+          parameters:
+            pipelinechannel--create_lakefs_tag:
+              componentInputParameter: create_lakefs_tag
+            pipelinechannel--lakefs_endpoint:
+              componentInputParameter: lakefs_endpoint
+            pipelinechannel--lakefs_repository:
+              componentInputParameter: lakefs_repository
+            pipelinechannel--train-kronodroid-autoencoder-op-lakefs_commit_id:
+              taskOutputParameter:
+                outputParameterKey: lakefs_commit_id
+                producerTask: train-kronodroid-autoencoder-op
+            pipelinechannel--train-kronodroid-autoencoder-op-model_name:
+              taskOutputParameter:
+                outputParameterKey: model_name
+                producerTask: train-kronodroid-autoencoder-op
+            pipelinechannel--train-kronodroid-autoencoder-op-model_version:
+              taskOutputParameter:
+                outputParameterKey: model_version
+                producerTask: train-kronodroid-autoencoder-op
+        taskInfo:
+          name: condition-1
+        triggerPolicy:
+          condition: inputs.parameter_values['pipelinechannel--create_lakefs_tag']
+            == true
+      train-kronodroid-autoencoder-op:
+        cachingOptions:
+          enableCache: true
+        componentRef:
+          name: comp-train-kronodroid-autoencoder-op
+        inputs:
+          parameters:
+            batch_size:
+              componentInputParameter: batch_size
+            enable_gradient_logging:
+              componentInputParameter: enable_gradient_logging
+            enable_resource_monitoring:
+              componentInputParameter: enable_resource_monitoring
+            enable_tensorboard:
+              componentInputParameter: enable_tensorboard
+            feast_feature_view:
+              componentInputParameter: feast_feature_view
+            feast_project:
+              componentInputParameter: feast_project
+            feast_repo_path:
+              componentInputParameter: feast_repo_path
+            feature_names_json:
+              componentInputParameter: feature_names_json
+            hidden_dims_json:
+              componentInputParameter: hidden_dims_json
+            iceberg_catalog:
+              componentInputParameter: iceberg_catalog
+            iceberg_database:
+              componentInputParameter: iceberg_database
+            lakefs_endpoint:
+              componentInputParameter: lakefs_endpoint
+            lakefs_ref:
+              componentInputParameter: lakefs_ref
+            lakefs_repository:
+              componentInputParameter: lakefs_repository
+            latent_dim:
+              componentInputParameter: latent_dim
+            learning_rate:
+              componentInputParameter: learning_rate
+            log_every_n_steps:
+              componentInputParameter: log_every_n_steps
+            log_level:
+              componentInputParameter: log_level
+            max_epochs:
+              componentInputParameter: max_epochs
+            max_rows_per_split:
+              componentInputParameter: max_rows_per_split
+            minio_endpoint:
+              componentInputParameter: minio_endpoint
+            mlflow_experiment_name:
+              componentInputParameter: mlflow_experiment_name
+            mlflow_model_name:
+              componentInputParameter: mlflow_model_name
+            mlflow_tracking_uri:
+              componentInputParameter: mlflow_tracking_uri
+            seed:
+              componentInputParameter: seed
+            source_table:
+              componentInputParameter: source_table
+        taskInfo:
+          name: train-kronodroid-autoencoder-op
+  inputDefinitions:
+    parameters:
+      batch_size:
+        defaultValue: 512.0
+        description: Training batch size
+        isOptional: true
+        parameterType: NUMBER_INTEGER
+      create_lakefs_tag:
+        defaultValue: true
+        description: Create LakeFS tag for training data version
+        isOptional: true
+        parameterType: BOOLEAN
+      enable_gradient_logging:
+        defaultValue: true
+        description: Log gradient statistics during training
+        isOptional: true
+        parameterType: BOOLEAN
+      enable_resource_monitoring:
+        defaultValue: true
+        description: Log memory/GPU usage metrics
+        isOptional: true
+        parameterType: BOOLEAN
+      enable_tensorboard:
+        defaultValue: true
+        description: Enable TensorBoard logging alongside MLflow
+        isOptional: true
+        parameterType: BOOLEAN
+      feast_feature_view:
+        defaultValue: malware_sample_features
+        description: Feast feature view name (for lineage)
+        isOptional: true
+        parameterType: STRING
+      feast_project:
+        defaultValue: dfp
+        description: Feast project name (for lineage)
+        isOptional: true
+        parameterType: STRING
+      feast_repo_path:
+        defaultValue: /feast
+        description: Path to Feast feature_store.yaml in container
+        isOptional: true
+        parameterType: STRING
+      feature_names_json:
+        defaultValue: '["syscall_1_normalized", "syscall_2_normalized", "syscall_3_normalized",
+          "syscall_4_normalized", "syscall_5_normalized", "syscall_6_normalized",
+          "syscall_7_normalized", "syscall_8_normalized", "syscall_9_normalized",
+          "syscall_10_normalized", "syscall_11_normalized", "syscall_12_normalized",
+          "syscall_13_normalized", "syscall_14_normalized", "syscall_15_normalized",
+          "syscall_16_normalized", "syscall_17_normalized", "syscall_18_normalized",
+          "syscall_19_normalized", "syscall_20_normalized", "syscall_total", "syscall_mean"]'
+        description: JSON-encoded list of feature column names
+        isOptional: true
+        parameterType: STRING
+      hidden_dims_json:
+        defaultValue: '[128, 64]'
+        description: JSON-encoded list of hidden layer dimensions
+        isOptional: true
+        parameterType: STRING
+      iceberg_catalog:
+        defaultValue: lakefs
+        description: Iceberg catalog name
+        isOptional: true
+        parameterType: STRING
+      iceberg_database:
+        defaultValue: kronodroid
+        description: Iceberg database name
+        isOptional: true
+        parameterType: STRING
+      lakefs_endpoint:
+        defaultValue: http://lakefs.dfp:8000
+        description: LakeFS API endpoint URL
+        isOptional: true
+        parameterType: STRING
+      lakefs_ref:
+        defaultValue: main
+        description: LakeFS branch, tag, or commit reference
+        isOptional: true
+        parameterType: STRING
+      lakefs_repository:
+        defaultValue: kronodroid
+        description: LakeFS repository name
+        isOptional: true
+        parameterType: STRING
+      lakefs_secret_name:
+        defaultValue: lakefs-credentials
+        description: K8s secret with LakeFS credentials
+        isOptional: true
+        parameterType: STRING
+      latent_dim:
+        defaultValue: 16.0
+        description: Autoencoder latent space dimension
+        isOptional: true
+        parameterType: NUMBER_INTEGER
+      learning_rate:
+        defaultValue: 0.001
+        description: Optimizer learning rate
+        isOptional: true
+        parameterType: NUMBER_DOUBLE
+      log_every_n_steps:
+        defaultValue: 10.0
+        description: Log per-step metrics every N steps
+        isOptional: true
+        parameterType: NUMBER_INTEGER
+      log_level:
+        defaultValue: INFO
+        description: Python logging level (DEBUG, INFO, WARNING, ERROR)
+        isOptional: true
+        parameterType: STRING
+      max_epochs:
+        defaultValue: 10.0
+        description: Maximum training epochs
+        isOptional: true
+        parameterType: NUMBER_INTEGER
+      max_rows_per_split:
+        defaultValue: 0.0
+        description: Row limit per split (0=unlimited, useful for testing)
+        isOptional: true
+        parameterType: NUMBER_INTEGER
+      minio_endpoint:
+        defaultValue: http://minio.dfp:9000
+        description: MinIO endpoint for MLflow artifacts
+        isOptional: true
+        parameterType: STRING
+      minio_secret_name:
+        defaultValue: minio-credentials
+        description: K8s secret with MinIO credentials
+        isOptional: true
+        parameterType: STRING
+      mlflow_experiment_name:
+        defaultValue: kronodroid-autoencoder
+        description: MLflow experiment name
+        isOptional: true
+        parameterType: STRING
+      mlflow_model_name:
+        defaultValue: kronodroid_autoencoder
+        description: Name for model in MLflow registry
+        isOptional: true
+        parameterType: STRING
+      mlflow_tracking_uri:
+        defaultValue: http://mlflow.dfp:5000
+        description: MLflow tracking server URI
+        isOptional: true
+        parameterType: STRING
+      seed:
+        defaultValue: 1337.0
+        description: Random seed for reproducibility
+        isOptional: true
+        parameterType: NUMBER_INTEGER
+      source_table:
+        defaultValue: fct_training_dataset
+        description: Source Iceberg table (must have dataset_split column)
+        isOptional: true
+        parameterType: STRING
+schemaVersion: 2.1.0
+sdkVersion: kfp-2.9.0
+---
+platforms:
+  kubernetes:
+    deploymentSpec:
+      executors:
+        exec-lakefs-tag-model-data-op:
+          secretAsEnv:
+          - keyToEnv:
+            - envVar: LAKEFS_ACCESS_KEY_ID
+              secretKey: LAKEFS_ACCESS_KEY_ID
+            - envVar: LAKEFS_SECRET_ACCESS_KEY
+              secretKey: LAKEFS_SECRET_ACCESS_KEY
+            optional: false
+            secretNameParameter:
+              componentInputParameter: lakefs_secret_name
+        exec-train-kronodroid-autoencoder-op:
+          configMapAsVolume:
+          - configMapName: feast-config
+            configMapNameParameter:
+              runtimeValue:
+                constant: feast-config
+            mountPath: /feast
+            optional: false
+          imagePullPolicy: IfNotPresent
+          secretAsEnv:
+          - keyToEnv:
+            - envVar: LAKEFS_ACCESS_KEY_ID
+              secretKey: LAKEFS_ACCESS_KEY_ID
+            - envVar: LAKEFS_SECRET_ACCESS_KEY
+              secretKey: LAKEFS_SECRET_ACCESS_KEY
+            optional: false
+            secretNameParameter:
+              componentInputParameter: lakefs_secret_name
+          - keyToEnv:
+            - envVar: AWS_ACCESS_KEY_ID
+              secretKey: AWS_ACCESS_KEY_ID
+            - envVar: AWS_SECRET_ACCESS_KEY
+              secretKey: AWS_SECRET_ACCESS_KEY
+            optional: false
+            secretNameParameter:
+              componentInputParameter: minio_secret_name

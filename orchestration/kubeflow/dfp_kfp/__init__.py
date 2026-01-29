@@ -11,11 +11,17 @@ __all__ = [
     "lakefs_commit_merge_op",
     "lakefs_commit_only_op",
     "commit_and_merge_lakefs_branch",
+    # Autoencoder training components
+    "train_kronodroid_autoencoder_op",
+    "lakefs_tag_model_data_op",
     # Pipelines
     "kronodroid_iceberg_pipeline",
     "kronodroid_full_pipeline",
+    "kronodroid_autoencoder_training_pipeline",
+    "kronodroid_full_training_pipeline",
     "compile_pipeline",
     "compile_full_pipeline",
+    "compile_autoencoder_pipeline",
 ]
 
 
@@ -56,5 +62,28 @@ def __getattr__(name: str):
             return compile_pipeline
         else:
             return compile_full_pipeline
+
+    if name in ("train_kronodroid_autoencoder_op", "lakefs_tag_model_data_op"):
+        from orchestration.kubeflow.dfp_kfp.components.train_kronodroid_autoencoder_component import (
+            train_kronodroid_autoencoder_op,
+            lakefs_tag_model_data_op,
+        )
+        if name == "train_kronodroid_autoencoder_op":
+            return train_kronodroid_autoencoder_op
+        else:
+            return lakefs_tag_model_data_op
+
+    if name in ("kronodroid_autoencoder_training_pipeline", "kronodroid_full_training_pipeline", "compile_autoencoder_pipeline"):
+        from orchestration.kubeflow.dfp_kfp.pipelines.kronodroid_autoencoder_training_pipeline import (
+            kronodroid_autoencoder_training_pipeline,
+            kronodroid_full_training_pipeline,
+            compile_pipeline as compile_autoencoder_pipeline,
+        )
+        if name == "kronodroid_autoencoder_training_pipeline":
+            return kronodroid_autoencoder_training_pipeline
+        elif name == "kronodroid_full_training_pipeline":
+            return kronodroid_full_training_pipeline
+        else:
+            return compile_autoencoder_pipeline
 
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
