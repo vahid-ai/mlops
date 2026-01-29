@@ -39,15 +39,10 @@ tasks:
         
         echo ""
         echo "Step 3/8: Installing Kubeflow Pipelines..."
-        PIPELINE_VERSION=2.4.0
+        PIPELINE_VERSION=2.15.0
         kubectl apply -k "github.com/kubeflow/pipelines/manifests/kustomize/cluster-scoped-resources?ref=$PIPELINE_VERSION"
         kubectl wait --for condition=established --timeout=60s crd/applications.app.k8s.io || true
         kubectl apply -k "github.com/kubeflow/pipelines/manifests/kustomize/env/platform-agnostic-emissary?ref=$PIPELINE_VERSION"
-        
-        # Patch KFP minio to use official minio image (gcr.io/ml-pipeline image is unavailable)
-        echo "Patching KFP minio deployment with working image..."
-        sleep 5
-        kubectl -n kubeflow set image deployment/minio minio=minio/minio:RELEASE.2024-10-02T17-50-41Z || true
         
         echo ""
         echo "Step 4/8: Installing Spark Operator..."
@@ -75,7 +70,7 @@ tasks:
           kubectl wait --for=condition=ready pod -l app=ml-pipeline -n kubeflow --timeout=180s && break || sleep 10
         done
         kubectl wait --for=condition=ready pod -l app=ml-pipeline-ui -n kubeflow --timeout=180s || true
-        kubectl wait --for=condition=ready pod -l app=minio -n kubeflow --timeout=180s || true
+        kubectl wait --for=condition=ready pod -l app=seaweedfs -n kubeflow --timeout=180s || true
         kubectl wait --for=condition=ready pod -l app=mysql -n kubeflow --timeout=180s || true
         echo "Core KFP pods ready!"
         
