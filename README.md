@@ -133,6 +133,74 @@ Kaggle API → dlt → MinIO (raw) → dbt → MinIO (transformed) → Feast →
                   LakeFS (versioning)    LakeFS (versioning)
 ```
 
+## MLflow Model Management
+
+MLflow provides three levels of model storage, each serving a different purpose:
+
+### 1. Run Artifacts (Model Logged)
+**Location:** `/#/experiments/{id}/runs/{run_id}` → Artifacts tab
+
+When you call `mlflow.pytorch.log_model(model, "model")`:
+- Model files (weights, MLmodel, conda.yaml, etc.) are saved to the artifact store (MinIO)
+- Path: `s3://mlflow-artifacts/{experiment_id}/{run_id}/artifacts/model/`
+- This is file storage only - no versioning, no stage management, no central catalog
+- Any run can have multiple logged models (e.g., "model", "best_model", "checkpoint")
+
+### 2. Experiment Models Tab
+**Location:** `/#/experiments/{id}/models`
+
+A convenience view showing:
+- All models logged via `log_model()` in runs belonging to this experiment
+- Detected via the `mlflow.log-model.history` tag on each run
+- Not a registry - just a UI aggregation of logged models across runs
+
+### 3. Global Model Registry
+**Location:** `/#/models`
+
+When you call `mlflow.register_model(model_uri, "model_name")`:
+- Creates an entry in the Model Registry (separate database table)
+- Provides versioning (v1, v2, v3...), stages (None → Staging → Production → Archived), aliases, and lineage tracking
+- Central catalog for all production-ready models
+
+### Loading Models
+
+```python
+# From run artifacts (by run ID)
+model = mlflow.pytorch.load_model("runs:/e3cfb6f0.../model")
+
+# From registry (by name and version)
+model = mlflow.pytorch.load_model("models:/kronodroid_autoencoder/1")
+
+# From registry (by stage)
+model = mlflow.pytorch.load_model("models:/kronodroid_autoencoder/Production")
+```
+
+### Visual Summary
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                     MLflow Model Registry                        │
+│                      /#/models                                   │
+│  ┌─────────────────────────────────────────────────────────┐    │
+│  │ kronodroid_autoencoder                                   │    │
+│  │   v1 (Production) ──────────┐                           │    │
+│  │   v2 (Staging)    ────────┐ │                           │    │
+│  │   v3 (None)       ──────┐ │ │                           │    │
+│  └─────────────────────────│─│─│───────────────────────────┘    │
+└────────────────────────────│─│─│────────────────────────────────┘
+                             │ │ │  (references)
+                             ▼ ▼ ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                    Experiment: kronodroid-autoencoder            │
+│  ┌──────────────┐ ┌──────────────┐ ┌──────────────┐             │
+│  │ Run abc123   │ │ Run def456   │ │ Run ghi789   │             │
+│  │  Artifacts:  │ │  Artifacts:  │ │  Artifacts:  │             │
+│  │  - model/    │◄┼─│  - model/  │◄┼─│  - model/  │◄(registered)│
+│  │  - logs/     │ │ │            │ │ │  - ckpt/   │             │
+│  └──────────────┘ └──────────────┘ └──────────────┘             │
+└─────────────────────────────────────────────────────────────────┘
+```
+
 ## Tests and CI
 - Tests live in `tests/` (unit, integration, e2e). Run with `pytest` after replacing placeholders.
 - GitHub Actions workflows in `ci/github/workflows` cover lint, build/test, and KFP compile; Tekton and Dagger stubs also provided.
