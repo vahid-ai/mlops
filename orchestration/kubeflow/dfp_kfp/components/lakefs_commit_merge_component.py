@@ -25,8 +25,7 @@ class LakeFSCommitMergeOutput(NamedTuple):
 
 
 @dsl.component(
-    base_image="python:3.11-slim",
-    packages_to_install=["requests"],
+    base_image="dfp-lakefs-component:v1",
 )
 def lakefs_commit_merge_op(
     lakefs_endpoint: str,
@@ -191,8 +190,7 @@ def lakefs_commit_merge_op(
 
 
 @dsl.component(
-    base_image="python:3.11-slim",
-    packages_to_install=["requests"],
+    base_image="dfp-lakefs-component:v1",
 )
 def lakefs_commit_only_op(
     lakefs_endpoint: str,

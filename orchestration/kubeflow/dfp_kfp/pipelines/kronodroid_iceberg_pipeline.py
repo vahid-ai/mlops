@@ -142,7 +142,7 @@ def kronodroid_iceberg_pipeline(
         executor_instances=executor_instances,
         executor_memory=executor_memory,
         timeout_seconds=spark_timeout_seconds,
-    ).set_memory_limit("2Gi").set_cpu_limit("1000m")
+    ).set_memory_limit("4Gi").set_memory_request("2Gi").set_cpu_limit("2000m").set_cpu_request("500m")
 
     # Configure credentials for Spark task
     kubernetes.use_secret_as_env(
@@ -172,7 +172,7 @@ def kronodroid_iceberg_pipeline(
         run_id=run_id,
         pipeline_name="kronodroid-iceberg",
         delete_source_branch=delete_source_branch,
-    ).set_memory_limit("1Gi").set_cpu_limit("500m")
+    ).set_memory_limit("2Gi").set_memory_request("512Mi").set_cpu_limit("1000m").set_cpu_request("250m")
 
     # Set dependency
     commit_merge_task.after(spark_task)
@@ -294,7 +294,7 @@ def kronodroid_full_pipeline(
         executor_instances=executor_instances,
         executor_memory=executor_memory,
         timeout_seconds=spark_timeout_seconds,
-    ).set_memory_limit("2Gi").set_cpu_limit("1000m")
+    ).set_memory_limit("4Gi").set_memory_request("2Gi").set_cpu_limit("2000m").set_cpu_request("500m")
 
     # Configure MinIO credentials for Spark task
     kubernetes.use_secret_as_env(
@@ -325,7 +325,7 @@ def kronodroid_full_pipeline(
         run_id=run_id,
         pipeline_name="kronodroid-full",
         delete_source_branch=True,
-    ).set_memory_limit("1Gi").set_cpu_limit("500m")
+    ).set_memory_limit("2Gi").set_memory_request("512Mi").set_cpu_limit("1000m").set_cpu_request("250m")
 
     kubernetes.use_secret_as_env(
         task=commit_merge_task,
