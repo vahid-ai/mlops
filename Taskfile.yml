@@ -534,3 +534,181 @@ tasks:
         POD_NAME=${POD#pod/}
         echo "Tailing logs for $POD_NAME..."
         kubectl logs -n "{{.NAMESPACE}}" "$POD" -f --tail=200
+
+  # ===========================================================================
+  # Model Validation Tasks
+  # ===========================================================================
+
+  model:validate:
+    desc: Run full model validation (PyTorch → ExecuTorch → Android → Compare)
+    vars:
+      MODEL_NAME: '{{.MODEL_NAME | default "kronodroid_autoencoder"}}'
+      MODEL_VERSION: '{{.MODEL_VERSION | default "latest"}}'
+      TEST_DATA: '{{.TEST_DATA | default "./data/test_samples.npy"}}'
+      TOLERANCE: '{{.TOLERANCE | default "0.01"}}'
+      MLFLOW_URI: '{{.MLFLOW_URI | default "http://localhost:5050"}}'
+    cmds:
+      - |
+        uv run python tools/model_validation/validate_model.py \
+          --model-name "{{.MODEL_NAME}}" \
+          --model-version "{{.MODEL_VERSION}}" \
+          --test-data "{{.TEST_DATA}}" \
+          --tolerance "{{.TOLERANCE}}" \
+          --mlflow-uri "{{.MLFLOW_URI}}"
+
+  model:validate:no-android:
+    desc: Run model validation without Android emulator (host-only comparison)
+    vars:
+      MODEL_NAME: '{{.MODEL_NAME | default "kronodroid_autoencoder"}}'
+      MODEL_VERSION: '{{.MODEL_VERSION | default "latest"}}'
+      TEST_DATA: '{{.TEST_DATA | default "./data/test_samples.npy"}}'
+      TOLERANCE: '{{.TOLERANCE | default "0.01"}}'
+    cmds:
+      - |
+        uv run python tools/model_validation/validate_model.py \
+          --model-name "{{.MODEL_NAME}}" \
+          --model-version "{{.MODEL_VERSION}}" \
+          --test-data "{{.TEST_DATA}}" \
+          --tolerance "{{.TOLERANCE}}" \
+          --skip-android
+
+  model:export:
+    desc: Export PyTorch model from MLflow to ExecuTorch format
+    vars:
+      MODEL_NAME: '{{.MODEL_NAME}}'
+      MODEL_VERSION: '{{.MODEL_VERSION | default "latest"}}'
+      OUTPUT: '{{.OUTPUT | default "./models/model.pte"}}'
+      BACKEND: '{{.BACKEND | default "xnnpack"}}'
+      QUANTIZATION: '{{.QUANTIZATION | default "none"}}'
+    cmds:
+      - |
+        if [ -z "{{.MODEL_NAME}}" ]; then
+          echo "Error: MODEL_NAME is required"
+          echo "Usage: task model:export MODEL_NAME=my_model"
+          exit 1
+        fi
+        uv run python -m runtimes.executorch.export.cli export \
+          --model-name "{{.MODEL_NAME}}" \
+          --model-version "{{.MODEL_VERSION}}" \
+          --output "{{.OUTPUT}}" \
+          --backend "{{.BACKEND}}" \
+          --quantization "{{.QUANTIZATION}}" \
+          --register
+
+  model:export:list-quantization:
+    desc: List available quantization configurations
+    cmds:
+      - uv run python -m runtimes.executorch.export.cli list-quantization
+
+  model:compare:
+    desc: Compare inference results from different runtimes
+    vars:
+      PYTORCH_RESULTS: '{{.PYTORCH_RESULTS}}'
+      EXECUTORCH_RESULTS: '{{.EXECUTORCH_RESULTS | default ""}}'
+      ANDROID_RESULTS: '{{.ANDROID_RESULTS | default ""}}'
+      TOLERANCE: '{{.TOLERANCE | default "0.01"}}'
+    cmds:
+      - |
+        ARGS="--pytorch-results {{.PYTORCH_RESULTS}} --tolerance {{.TOLERANCE}}"
+        if [ -n "{{.EXECUTORCH_RESULTS}}" ]; then
+          ARGS="$ARGS --executorch-results {{.EXECUTORCH_RESULTS}}"
+        fi
+        if [ -n "{{.ANDROID_RESULTS}}" ]; then
+          ARGS="$ARGS --android-results {{.ANDROID_RESULTS}}"
+        fi
+        uv run python tools/model_validation/compare_results.py $ARGS
+
+  # ===========================================================================
+  # Android Build Tasks
+  # ===========================================================================
+
+  android:build:
+    desc: Build Android apps with Bazel
+    vars:
+      CONFIG: '{{.CONFIG | default "android_debug"}}'
+    cmds:
+      - bazel build --config={{.CONFIG}} //apps/android/...
+
+  android:build:main:
+    desc: Build main Android app
+    vars:
+      CONFIG: '{{.CONFIG | default "android_debug"}}'
+    cmds:
+      - bazel build --config={{.CONFIG}} //apps/android/main_app:main_app
+
+  android:build:runtime:
+    desc: Build runtime comparison app
+    vars:
+      CONFIG: '{{.CONFIG | default "android_debug"}}'
+    cmds:
+      - bazel build --config={{.CONFIG}} //apps/android/runtime_comparison_app:runtime_comparison_app
+
+  android:install:
+    desc: Build and install Android app on connected device/emulator
+    vars:
+      APP: '{{.APP | default "main_app"}}'
+    cmds:
+      - bazel mobile-install //apps/android/{{.APP}}:{{.APP}}
+
+  android:test:
+    desc: Run Android unit tests (Robolectric)
+    cmds:
+      - bazel test --config=robolectric //apps/android/...
+
+  android:test:device:
+    desc: Run Android instrumentation tests on device/emulator
+    cmds:
+      - |
+        echo "Building and installing test APK..."
+        bazel build --config=android_debug //apps/android/runtime_comparison_app:runtime_comparison_app
+
+        APK="bazel-bin/apps/android/runtime_comparison_app/runtime_comparison_app.apk"
+        if [ ! -f "$APK" ]; then
+          echo "Error: APK not found at $APK"
+          exit 1
+        fi
+
+        echo "Installing APK..."
+        adb install -r "$APK"
+
+        echo "Running instrumentation test..."
+        adb shell am instrument -w \
+          -e class com.dfp.runtimeapp.ModelAccuracyTest \
+          com.dfp.runtimeapp.test/androidx.test.runner.AndroidJUnitRunner
+
+  android:emulator:start:
+    desc: Start Android emulator
+    vars:
+      AVD: '{{.AVD | default "Pixel_6_API_34"}}'
+    cmds:
+      - |
+        if adb devices | grep -q "emulator"; then
+          echo "Emulator already running"
+        else
+          echo "Starting emulator: {{.AVD}}"
+          emulator -avd "{{.AVD}}" -no-snapshot-load &
+          echo "Waiting for emulator to boot..."
+          adb wait-for-device
+          adb shell 'while [[ -z $(getprop sys.boot_completed) ]]; do sleep 1; done'
+          echo "Emulator ready!"
+        fi
+
+  android:emulator:stop:
+    desc: Stop Android emulator
+    cmds:
+      - adb -s emulator-5554 emu kill || true
+
+  android:results:pull:
+    desc: Pull benchmark results from Android device
+    vars:
+      OUTPUT_DIR: '{{.OUTPUT_DIR | default "./results"}}'
+    cmds:
+      - |
+        mkdir -p "{{.OUTPUT_DIR}}"
+        echo "Pulling benchmark results..."
+        adb pull /sdcard/Android/data/com.dfp.runtimeapp/files/ "{{.OUTPUT_DIR}}/" || {
+          echo "Could not pull results. Make sure the app has run and generated results."
+          exit 1
+        }
+        echo "Results saved to {{.OUTPUT_DIR}}/"
+        ls -la "{{.OUTPUT_DIR}}/"

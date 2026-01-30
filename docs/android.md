@@ -598,6 +598,325 @@ bazel query "deps(//apps/android/main_app:main_app)" --output=graph | dot -Tpng 
 
 ---
 
+## Model Validation Workflow
+
+The project includes a complete workflow for validating ExecuTorch models against PyTorch baselines, including running on Android emulators.
+
+### Architecture Overview
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                           MLOps Model Testing Pipeline                       │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+┌──────────────┐    ┌──────────────┐    ┌──────────────┐    ┌──────────────┐
+│   MLflow     │    │  ExecuTorch  │    │   Android    │    │   MLflow     │
+│  Model Reg   │───▶│   Export     │───▶│  Emulator    │───▶│   Results    │
+│  (PyTorch)   │    │  (.pte)      │    │   Test       │    │   Logging    │
+└──────────────┘    └──────────────┘    └──────────────┘    └──────────────┘
+       │                   │                   │                   │
+       ▼                   ▼                   ▼                   ▼
+  ┌─────────┐        ┌─────────┐        ┌─────────┐        ┌─────────┐
+  │ Weights │        │  .pte   │        │ Results │        │ Compare │
+  │ + Model │        │ Artifact│        │  JSON   │        │ Report  │
+  └─────────┘        └─────────┘        └─────────┘        └─────────┘
+```
+
+### Key Components
+
+| Component | Location | Purpose |
+|-----------|----------|---------|
+| **ExecuTorch export** | `runtimes/executorch/export/` | PyTorch → .pte conversion, MLflow integration |
+| **Android app/tests** | `apps/android/runtime_comparison_app/` | Run inference, collect results |
+| **Orchestration** | `tools/model_validation/` | End-to-end validation, comparisons |
+| **Models** | `models/` | Local cache for .pte files |
+
+### Export Package (`runtimes/executorch/export/`)
+
+The export package provides tools for converting PyTorch models to ExecuTorch format:
+
+```python
+from runtimes.executorch.export import (
+    ExecuTorchExporter,
+    MLflowExecuTorchClient,
+    get_quantization_config,
+)
+
+# Initialize
+client = MLflowExecuTorchClient("http://localhost:5050")
+exporter = ExecuTorchExporter(backend="xnnpack", quantization="none")
+
+# Fetch model from MLflow
+model, metadata = client.fetch_pytorch_model("kronodroid_autoencoder")
+
+# Export to ExecuTorch
+example_inputs = (torch.randn(1, 289),)
+export_metadata = exporter.export(model, example_inputs, "model.pte")
+
+# Register in MLflow
+client.register_executorch_model(
+    pte_path="model.pte",
+    source_run_id=metadata.run_id,
+    model_name="kronodroid_autoencoder",
+    export_metadata=export_metadata.to_dict(),
+)
+```
+
+### Available Quantization Configs
+
+| Config | Description |
+|--------|-------------|
+| `none` | No quantization (fp32) |
+| `dynamic_int8` | Dynamic quantization with int8 weights |
+| `static_int8` | Static quantization (requires calibration) |
+| `qat_int8` | Quantization-aware training |
+| `mobile` | Mobile-optimized settings |
+
+List configs:
+```bash
+task model:export:list-quantization
+```
+
+### CLI Usage
+
+```bash
+# Export model from MLflow
+uv run python -m runtimes.executorch.export.cli export \
+    --model-name kronodroid_autoencoder \
+    --output models/kronodroid.pte \
+    --backend xnnpack \
+    --quantization none \
+    --register
+
+# Validate exported model
+uv run python -m runtimes.executorch.export.cli validate \
+    --model-name kronodroid_autoencoder \
+    --pte-path models/kronodroid.pte \
+    --tolerance 0.01
+
+# Show model info
+uv run python -m runtimes.executorch.export.cli info models/kronodroid.pte
+```
+
+---
+
+## Task Reference
+
+### Model Validation Tasks
+
+| Task | Description |
+|------|-------------|
+| `task model:validate` | Full validation: PyTorch → ExecuTorch → Android → Compare |
+| `task model:validate:no-android` | Host-only validation (skip emulator) |
+| `task model:export` | Export PyTorch model to ExecuTorch format |
+| `task model:export:list-quantization` | List quantization configurations |
+| `task model:compare` | Compare inference results between runtimes |
+
+#### Examples
+
+```bash
+# Full validation with Android emulator
+task model:validate \
+    MODEL_NAME=kronodroid_autoencoder \
+    TEST_DATA=data/test_samples.npy \
+    TOLERANCE=0.01
+
+# Export with quantization
+task model:export \
+    MODEL_NAME=kronodroid_autoencoder \
+    OUTPUT=models/kronodroid_int8.pte \
+    QUANTIZATION=dynamic_int8
+
+# Compare results
+task model:compare \
+    PYTORCH_RESULTS=results/pytorch.json \
+    ANDROID_RESULTS=results/android.json \
+    TOLERANCE=0.01
+```
+
+### Android Build Tasks
+
+| Task | Description |
+|------|-------------|
+| `task android:build` | Build all Android apps |
+| `task android:build:main` | Build main app |
+| `task android:build:runtime` | Build runtime comparison app |
+| `task android:install` | Install app on device/emulator |
+| `task android:test` | Run Robolectric tests |
+| `task android:test:device` | Run instrumentation tests on device |
+| `task android:emulator:start` | Start Android emulator |
+| `task android:emulator:stop` | Stop Android emulator |
+| `task android:results:pull` | Pull benchmark results from device |
+
+#### Examples
+
+```bash
+# Build debug APK
+task android:build:runtime CONFIG=android_debug
+
+# Build release APK (multi-ABI)
+task android:build:runtime CONFIG=android_release
+
+# Install on connected device
+task android:install APP=runtime_comparison_app
+
+# Run tests on emulator
+task android:emulator:start AVD=Pixel_6_API_34
+task android:test:device
+
+# Pull results
+task android:results:pull OUTPUT_DIR=./results
+```
+
+---
+
+## End-to-End Validation Workflow
+
+### Step-by-Step Guide
+
+1. **Ensure MLflow is running with a trained model**:
+   ```bash
+   task port-forward  # Start port-forwards
+   # MLflow should be at http://localhost:5050
+   ```
+
+2. **Prepare test data**:
+   ```bash
+   # Create test data as numpy array
+   python -c "
+   import numpy as np
+   # Generate or load test samples
+   test_data = np.random.randn(100, 289).astype(np.float32)
+   np.save('data/test_samples.npy', test_data)
+   "
+   ```
+
+3. **Export model to ExecuTorch**:
+   ```bash
+   task model:export \
+       MODEL_NAME=kronodroid_autoencoder \
+       OUTPUT=models/kronodroid_autoencoder.pte
+   ```
+
+4. **Run host-only validation** (no emulator needed):
+   ```bash
+   task model:validate:no-android \
+       MODEL_NAME=kronodroid_autoencoder \
+       TEST_DATA=data/test_samples.npy
+   ```
+
+5. **Or run full validation with Android emulator**:
+   ```bash
+   # Start emulator
+   task android:emulator:start
+
+   # Run full validation
+   task model:validate \
+       MODEL_NAME=kronodroid_autoencoder \
+       TEST_DATA=data/test_samples.npy
+   ```
+
+6. **View results in MLflow**:
+   - Open http://localhost:5050
+   - Find the training run
+   - Check artifacts for `executorch/model.pte`
+   - Check metrics for `validation.*` and `android.*`
+
+### MLflow Integration
+
+The validation workflow logs everything to MLflow:
+
+```
+MLflow Run (original training)
+├── Artifacts
+│   ├── model/                    # PyTorch model
+│   │   ├── model.pth
+│   │   └── MLmodel
+│   └── executorch/               # ExecuTorch export
+│       ├── model.pte
+│       └── model.json
+├── Parameters
+│   ├── learning_rate: 0.001
+│   ├── executorch.backend: xnnpack
+│   └── executorch.quantization: none
+├── Metrics
+│   ├── train_loss: 0.023
+│   ├── validation.pytorch.mean_output: 0.45
+│   ├── validation.executorch.mean_output: 0.449
+│   ├── validation.pass_rate: 0.99
+│   ├── validation.max_diff: 0.008
+│   ├── android.avg_latency_ms: 12.5
+│   └── android.throughput_samples_per_sec: 80.0
+└── Tags
+    ├── executorch.exported: true
+    ├── executorch.backend: xnnpack
+    └── android.tested: true
+```
+
+### Validation Criteria
+
+The validation passes when:
+- **99%+ samples** are within tolerance (default: 0.01)
+- Model loads successfully on Android
+- Inference latency is reasonable (< 100ms avg, < 500ms p99)
+
+Failed validations return exit code 1 and log details to MLflow.
+
+---
+
+## Runtime Comparison App
+
+The `runtime_comparison_app` is designed to benchmark model inference on Android:
+
+### Features
+
+- Load ExecuTorch models from assets
+- Run inference with configurable warmup
+- Collect detailed latency metrics (avg, p50, p95, p99)
+- Save results as JSON for analysis
+- Support for instrumentation tests
+
+### Key Classes
+
+| Class | Purpose |
+|-------|---------|
+| `ModelBenchmark` | Load models, run inference, collect metrics |
+| `ResultsReporter` | Save results to file, post to server, log to Logcat |
+| `ModelAccuracyTest` | Instrumentation tests for accuracy validation |
+
+### Running Benchmarks Manually
+
+```kotlin
+// In Android app
+val benchmark = ModelBenchmark(context)
+benchmark.loadModelFromAssets("models/kronodroid.pte")
+
+val testData = listOf(
+    "sample_001" to FloatArray(289) { 0.5f },
+    "sample_002" to FloatArray(289) { 0.3f },
+)
+
+val results = benchmark.runInference(testData, warmupRuns = 5)
+
+val reporter = ResultsReporter(context)
+reporter.saveToFile(results, "benchmark_results.json")
+reporter.logSummary(results)
+```
+
+### Pulling Results from Device
+
+```bash
+# After running the app
+task android:results:pull OUTPUT_DIR=./results
+
+# Results include:
+# - benchmark_results.json  (full inference results)
+# - performance_test_results.json  (from instrumentation tests)
+# - accuracy_test_results.json  (accuracy metrics)
+```
+
+---
+
 ## Further Reading
 
 - [Bazel Documentation](https://bazel.build/docs)
@@ -605,3 +924,4 @@ bazel query "deps(//apps/android/main_app:main_app)" --output=graph | dot -Tpng 
 - [rules_kotlin](https://github.com/bazelbuild/rules_kotlin)
 - [ExecuTorch Documentation](https://pytorch.org/executorch/)
 - [Bazel Android Tutorial](https://bazel.build/tutorials/android-app)
+- [MLflow Model Registry](https://mlflow.org/docs/latest/model-registry.html)
