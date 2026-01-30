@@ -15,6 +15,109 @@ tasks:
     cmds:
       - mise install
 
+  bazel:install:
+    desc: Install Bazel via Bazelisk (cross-platform version manager)
+    vars:
+      BAZELISK_VERSION: '{{.BAZELISK_VERSION | default "v1.25.0"}}'
+      INSTALL_DIR: '{{.INSTALL_DIR | default "/usr/local/bin"}}'
+    cmds:
+      - |
+        set -e
+
+        # Detect OS
+        OS="$(uname -s | tr '[:upper:]' '[:lower:]')"
+        case "$OS" in
+          darwin) OS="darwin" ;;
+          linux) OS="linux" ;;
+          mingw*|msys*|cygwin*) OS="windows" ;;
+          *)
+            echo "Unsupported OS: $OS"
+            exit 1
+            ;;
+        esac
+
+        # Detect architecture
+        ARCH="$(uname -m)"
+        case "$ARCH" in
+          x86_64|amd64) ARCH="amd64" ;;
+          aarch64|arm64) ARCH="arm64" ;;
+          *)
+            echo "Unsupported architecture: $ARCH"
+            exit 1
+            ;;
+        esac
+
+        echo "Detected platform: ${OS}-${ARCH}"
+        echo "Installing Bazelisk {{.BAZELISK_VERSION}}..."
+
+        # Set binary name and extension
+        if [ "$OS" = "windows" ]; then
+          BINARY_NAME="bazelisk-${OS}-${ARCH}.exe"
+          TARGET_NAME="bazel.exe"
+        else
+          BINARY_NAME="bazelisk-${OS}-${ARCH}"
+          TARGET_NAME="bazel"
+        fi
+
+        # Download URL
+        URL="https://github.com/bazelbuild/bazelisk/releases/download/{{.BAZELISK_VERSION}}/${BINARY_NAME}"
+
+        echo "Downloading from: $URL"
+
+        # Create temp directory
+        TEMP_DIR=$(mktemp -d)
+        trap "rm -rf $TEMP_DIR" EXIT
+
+        # Download Bazelisk
+        if command -v curl >/dev/null 2>&1; then
+          curl -fsSL -o "${TEMP_DIR}/${TARGET_NAME}" "$URL"
+        elif command -v wget >/dev/null 2>&1; then
+          wget -q -O "${TEMP_DIR}/${TARGET_NAME}" "$URL"
+        else
+          echo "Error: curl or wget required"
+          exit 1
+        fi
+
+        # Make executable (not needed on Windows)
+        if [ "$OS" != "windows" ]; then
+          chmod +x "${TEMP_DIR}/${TARGET_NAME}"
+        fi
+
+        # Install to target directory
+        INSTALL_PATH="{{.INSTALL_DIR}}/${TARGET_NAME}"
+
+        echo "Installing to: $INSTALL_PATH"
+
+        # Check if we need sudo
+        if [ -w "{{.INSTALL_DIR}}" ]; then
+          mv "${TEMP_DIR}/${TARGET_NAME}" "$INSTALL_PATH"
+        else
+          echo "Requires sudo to install to {{.INSTALL_DIR}}"
+          sudo mv "${TEMP_DIR}/${TARGET_NAME}" "$INSTALL_PATH"
+        fi
+
+        # Verify installation
+        echo ""
+        echo "Bazelisk installed successfully!"
+        echo ""
+        "$INSTALL_PATH" --version
+        echo ""
+        echo "Bazelisk will automatically download the correct Bazel version"
+        echo "when you run 'bazel' based on .bazelversion file (if present)"
+
+  bazel:version:
+    desc: Show installed Bazel/Bazelisk version
+    cmds:
+      - |
+        if command -v bazel >/dev/null 2>&1; then
+          echo "Bazelisk version:"
+          bazel --version
+          echo ""
+          echo "To see actual Bazel version, run: bazel version"
+        else
+          echo "Bazel/Bazelisk not found. Run: task bazel:install"
+        fi
+
   up:
     desc: Create kind cluster and deploy local services
     cmds:

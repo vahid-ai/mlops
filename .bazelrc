@@ -1,1 +1,97 @@
-# Bazel configuration placeholder for dfp builds.
+# =============================================================================
+# Common Settings
+# =============================================================================
+
+# Enable Bzlmod (modern dependency management)
+common --enable_bzlmod
+
+# Show timestamps in output
+common --show_timestamps
+
+# =============================================================================
+# Build Settings
+# =============================================================================
+
+# Java/Kotlin toolchain
+build --java_language_version=17
+build --java_runtime_version=remotejdk_17
+
+# C++ settings for native code (ExecuTorch)
+build --cxxopt=-std=c++17
+build --host_cxxopt=-std=c++17
+
+# Optimization
+build --compilation_mode=opt
+
+# =============================================================================
+# Android Settings
+# =============================================================================
+
+# Target Android API level
+build --android_sdk=@androidsdk//:sdk-34
+
+# Multi-ABI builds for release
+build:android_release --fat_apk_cpu=arm64-v8a,armeabi-v7a,x86_64
+
+# Single ABI for faster debug builds
+build:android_debug --fat_apk_cpu=arm64-v8a
+
+# =============================================================================
+# Test Settings
+# =============================================================================
+
+# Show test output on failure
+test --test_output=errors
+test --test_summary=terse
+
+# Robolectric configuration
+test:robolectric --define=robolectric=true
+test:robolectric --test_env=ROBOLECTRIC_OFFLINE=true
+
+# Increase test timeout for instrumentation tests
+test:android_test --test_timeout=600
+
+# =============================================================================
+# CI Settings
+# =============================================================================
+
+# Settings optimized for CI
+build:ci --jobs=auto
+build:ci --verbose_failures
+build:ci --announce_rc
+
+test:ci --test_output=all
+test:ci --test_verbose_timeout_warnings
+
+# =============================================================================
+# Local Development Settings
+# =============================================================================
+
+# Faster incremental builds
+build:local --experimental_reuse_sandbox_directories
+
+# =============================================================================
+# ExecuTorch Model Settings
+# =============================================================================
+
+# Enable ExecuTorch runtime
+build:executorch --//:executorch_enabled=true
+
+# XNNPack backend (optimized CPU inference)
+build:executorch_xnnpack --config=executorch
+build:executorch_xnnpack --//:xnnpack_enabled=true
+
+# =============================================================================
+# Platform-specific Settings
+# =============================================================================
+
+# macOS specific
+build:macos --apple_platform_type=macos
+
+# Linux specific
+build:linux --copt=-fPIC
+
+# =============================================================================
+# Try-import user-specific settings (optional, not in version control)
+# =============================================================================
+try-import %workspace%/user.bazelrc

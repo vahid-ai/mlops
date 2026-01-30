@@ -1,0 +1,14 @@
+"""Apps package - contains Android and API applications."""
+
+package(default_visibility = ["//visibility:public"])
+
+# Aliases to app targets
+alias(
+    name = "android_main",
+    actual = "//apps/android/main_app:main_app",
+)
+
+alias(
+    name = "android_runtime_comparison",
+    actual = "//apps/android/runtime_comparison_app:runtime_comparison_app",
+)

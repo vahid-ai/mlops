@@ -1,0 +1,2 @@
+# This directory contains ExecuTorch models (.pte files) exported from ML pipelines.
+# .pte files should be added to .gitignore if they are large binary files.

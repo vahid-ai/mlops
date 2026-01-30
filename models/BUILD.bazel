@@ -1,0 +1,61 @@
+"""ExecuTorch models exported from ML pipelines.
+
+This package contains ExecuTorch (.pte) models converted from PyTorch models
+trained in Kubeflow pipelines. Models are exported using torch.export() and
+converted to ExecuTorch format for mobile deployment.
+
+Workflow:
+1. Train PyTorch model in Kubeflow pipeline
+2. Export model using torch.export()
+3. Convert to ExecuTorch format (.pte)
+4. Place .pte file in this directory
+5. Reference from Android apps via //models:exported_models
+"""
+
+package(default_visibility = ["//visibility:public"])
+
+# =============================================================================
+# Exported Models
+# =============================================================================
+
+# All ExecuTorch model files (.pte format)
+filegroup(
+    name = "exported_models",
+    srcs = glob(
+        ["**/*.pte"],
+        allow_empty = True,
+    ),
+)
+
+# Individual model targets (add as models are created)
+# Example:
+# filegroup(
+#     name = "kronodroid_autoencoder",
+#     srcs = ["kronodroid_autoencoder.pte"],
+# )
+
+# =============================================================================
+# Model Metadata
+# =============================================================================
+
+# Model metadata files (JSON with input/output specs, version info)
+filegroup(
+    name = "model_metadata",
+    srcs = glob(
+        ["**/*.json"],
+        allow_empty = True,
+    ),
+)
+
+# =============================================================================
+# Test Models
+# =============================================================================
+
+# Smaller test models for unit testing
+filegroup(
+    name = "test_models",
+    srcs = glob(
+        ["test/**/*.pte"],
+        allow_empty = True,
+    ),
+)
