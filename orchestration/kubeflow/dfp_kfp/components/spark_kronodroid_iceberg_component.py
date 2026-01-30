@@ -601,10 +601,10 @@ def run_spark_kronodroid_iceberg(
     marts_database: str = "kronodroid",
     catalog_name: str = "lakefs",
     driver_cores: int = 1,
-    driver_memory: str = "2g",
+    driver_memory: str = "512m",
     executor_cores: int = 2,
-    executor_instances: int = 2,
-    executor_memory: str = "2g",
+    executor_instances: int = 1,
+    executor_memory: str = "512m",
     timeout_seconds: int = 3600,
 ) -> SparkJobOutput:
     """Run the Spark Kronodroid Iceberg job (for testing outside KFP).

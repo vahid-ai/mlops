@@ -408,10 +408,10 @@ def run_kubeflow_transformations(
     minio_secret_name: str = "minio-credentials",
     lakefs_secret_name: str = "lakefs-credentials",
     driver_cores: int = 1,
-    driver_memory: str = "4g",
+    driver_memory: str = "512m",
     executor_cores: int = 2,
-    executor_instances: int = 2,
-    executor_memory: str = "6g",
+    executor_instances: int = 1,
+    executor_memory: str = "512m",
     timeout_seconds: int = 3600,
     use_kfp_client: bool = False,
     kfp_host: str | None = None,
@@ -1422,19 +1422,19 @@ def main():
     # Spark resource options for testing
     parser.add_argument(
         "--driver-memory",
-        default="4g",
-        help="Spark driver memory (default: 4g)",
+        default="512m",
+        help="Spark driver memory (default: 512m)",
     )
     parser.add_argument(
         "--executor-memory",
-        default="6g",
-        help="Spark executor memory (default: 6g)",
+        default="512m",
+        help="Spark executor memory (default: 512m)",
     )
     parser.add_argument(
         "--executor-instances",
         type=int,
-        default=2,
-        help="Number of Spark executors (default: 2)",
+        default=1,
+        help="Number of Spark executors (default: 1)",
     )
     parser.add_argument(
         "--test-mode",
