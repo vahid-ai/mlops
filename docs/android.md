@@ -272,9 +272,14 @@ use_repo(maven, "maven")
 
 #### Python Version Requirement
 
-> **Important**: ExecuTorch requires **Python 3.10, 3.11, or 3.12**. Python 3.13 is not yet supported.
+> **Important**: This project uses **Python 3.12** as the "blessed" version. See [Python Versioning Strategy](./python-versioning.md) for details.
 
-If you're using Python 3.13, create a separate virtual environment for Android/ExecuTorch work:
+Python 3.12 is required because:
+- ExecuTorch 0.4.0 requires Python 3.10-3.12 (no 3.13 support)
+- ExecuTorch has pandas version constraints on Python 3.10/3.11 that conflict with our dependencies
+- Python 3.12 avoids these conflicts while providing modern features
+
+To set up the environment:
 
 ```bash
 # Create venv with Python 3.12 for ExecuTorch
@@ -576,7 +581,7 @@ hint: You're using CPython 3.13 (`cp313`), but `executorch` only has wheels
 with the following Python ABI tags: `cp310`, `cp311`, `cp312`
 ```
 
-**Fix**: ExecuTorch requires Python 3.10-3.12. Create a separate environment:
+**Fix**: This project requires Python 3.12. See [Python Versioning Strategy](./python-versioning.md). Set up the environment:
 
 ```bash
 # Create Python 3.12 environment
@@ -720,8 +725,8 @@ The export package provides tools for converting PyTorch models to ExecuTorch fo
 #### Installation
 
 ```bash
-# Requires Python 3.10-3.12 (Python 3.13 not supported)
-uv sync --group android
+# Sync environment with ExecuTorch (Python 3.12 required)
+task uv:sync:android
 
 # Verify installation
 uv pip show executorch
@@ -873,7 +878,7 @@ task android:results:pull OUTPUT_DIR=./results
 
 Before running the validation workflow, ensure:
 
-- [ ] **Python 3.10-3.12** (ExecuTorch doesn't support 3.13 yet)
+- [ ] **Python 3.12** (see [Python Versioning Strategy](./python-versioning.md))
 - [ ] **ExecuTorch installed**: `uv sync --group android`
 - [ ] **Kind cluster running**: `task status`
 - [ ] **Port-forwards active**: `task port-forward`

@@ -2,7 +2,13 @@
 name = "dfp-monorepo"
 version = "0.1.0"
 description = "Digital Fingerprinting pipelines with swappable engines and stores"
-requires-python = ">=3.10"
+# Python 3.12 is the "blessed" version for this project:
+# - Supported by ExecuTorch (requires 3.10-3.12)
+# - Compatible with PyTorch 2.5.x
+# - Works with Spark 3.5 containers
+# - Has modern Python features without breaking compatibility
+# Note: We pin to 3.12 to avoid executorch's pandas constraints on 3.10/3.11
+requires-python = ">=3.12,<3.13"
 authors = [{name = "DFP Team"}]
 dependencies = [
     "pydantic>=2.0",
@@ -13,7 +19,10 @@ dependencies = [
     "pyspark>=3.5",
     "lakefs-client>=1.1",
     "dagster~=1.4",
-    "torch>=2.1",
+    # PyTorch 2.5.x for ExecuTorch 0.4.0 compatibility
+    # Note: Models saved with PyTorch 2.4.x need to be re-saved with 2.5.x
+    # See docs/python-versioning.md for migration instructions
+    "torch>=2.5.0,<2.6",
     # dlt and dbt for data ingestion and transformation
     "dlt[filesystem]>=0.4",
     "dbt-core>=1.7",
@@ -45,6 +54,20 @@ dev = [
 android = [
     # ExecuTorch for PyTorch mobile deployment
     # Install with: uv sync --group android
-    # Note: ExecuTorch requires specific PyTorch version compatibility
-    "executorch>=0.4.0",
+    # Requires Python 3.10-3.12 (no 3.13 support)
+    # executorch 0.4.0 requires torch==2.5.0
+    "executorch==0.4.0",
 ]
+
+# Kubeflow pipeline dependencies - matches container environment
+# Use: uv sync --group kubeflow
+kubeflow = [
+    "kfp>=2.9.0",
+    "lightning>=2.0",
+    "tensorboard>=2.0",
+    "psutil>=5.9",
+]
+
+# NOTE: Spark/Feast container dependencies (pandas<2) are defined directly
+# in tools/docker/Dockerfile.autoencoder_train and tools/docker/requirements-spark.txt
+# They cannot be a dependency group here because pandas<2 conflicts with main deps

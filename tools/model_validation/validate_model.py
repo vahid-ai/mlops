@@ -109,18 +109,19 @@ def run_executorch_inference(
     Returns:
         Dict mapping sample_id to output values.
     """
-    from executorch.runtime import Runtime
+    import torch
+    from executorch.extension.pybindings.portable_lib import _load_for_executorch
 
-    runtime = Runtime.get()
-    program = runtime.load_program(str(pte_path))
-    method = program.load_method("forward")
+    # Load the ExecuTorch model
+    et_module = _load_for_executorch(str(pte_path))
 
     results = {}
 
     for i, sample in enumerate(test_data):
         sample_id = f"sample_{i:04d}"
-        input_array = sample.astype(np.float32).reshape(1, -1)
-        output = method.execute([input_array])
+        # Convert to torch tensor (ExecuTorch expects torch tensors, not numpy)
+        input_tensor = torch.from_numpy(sample.astype(np.float32)).reshape(1, -1)
+        output = et_module.forward((input_tensor,))
         results[sample_id] = output[0].flatten().tolist()
 
     logger.info(f"ExecuTorch inference complete: {len(results)} samples")

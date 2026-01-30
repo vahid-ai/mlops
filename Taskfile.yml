@@ -15,6 +15,102 @@ tasks:
     cmds:
       - mise install
 
+  # ─────────────────────────────────────────────────────────────────────────────
+  # Python Environment Management (uv)
+  # ─────────────────────────────────────────────────────────────────────────────
+
+  uv:sync:
+    desc: Sync default Python environment (Python 3.12)
+    cmds:
+      - |
+        echo "Syncing Python 3.12 environment..."
+        uv sync --python 3.12
+        echo ""
+        echo "Environment ready. Run 'source .venv/bin/activate' or use 'uv run <command>'"
+
+  uv:sync:dev:
+    desc: Sync environment with dev dependencies (linting, testing)
+    cmds:
+      - |
+        echo "Syncing Python 3.12 environment with dev dependencies..."
+        uv sync --python 3.12 --group dev
+        echo ""
+        echo "Dev environment ready with pyrefly, torchfix, pytest"
+
+  uv:sync:android:
+    desc: Sync environment for ExecuTorch/Android development
+    cmds:
+      - |
+        echo "Syncing Python 3.12 environment with ExecuTorch..."
+        uv sync --python 3.12 --group android
+        echo ""
+        echo "Android/ExecuTorch environment ready"
+
+  uv:sync:kubeflow:
+    desc: Sync environment for Kubeflow pipeline development
+    cmds:
+      - |
+        echo "Syncing Python 3.12 environment with Kubeflow dependencies..."
+        uv sync --python 3.12 --group kubeflow
+        echo ""
+        echo "Kubeflow environment ready"
+
+  uv:sync:all:
+    desc: Sync environment with all dependency groups
+    cmds:
+      - |
+        echo "Syncing Python 3.12 environment with all dependency groups..."
+        uv sync --python 3.12 --all-groups
+        echo ""
+        echo "Full environment ready with all dependencies"
+
+  uv:info:
+    desc: Show Python environment information
+    cmds:
+      - |
+        echo "=== Python Environment Info ==="
+        echo ""
+        echo "uv version:"
+        uv --version
+        echo ""
+        echo "Project Python constraint:"
+        grep "requires-python" pyproject.toml || echo "Not specified"
+        echo ""
+        echo ".python-version file:"
+        cat .python-version 2>/dev/null || echo "Not found"
+        echo ""
+        echo "Current virtual environment:"
+        if [ -d ".venv" ]; then
+          .venv/bin/python --version
+          PKGCOUNT=$(uv pip list 2>/dev/null | wc -l | tr -d ' ')
+          echo "Packages: $((PKGCOUNT - 2)) installed"
+        else
+          echo "No .venv found - run 'task uv:sync' to create"
+        fi
+        echo ""
+        echo "Key package versions:"
+        uv run python -c "import torch; print(f'  PyTorch: {torch.__version__}')" 2>/dev/null || echo "  PyTorch: not installed"
+        uv run python -c "import pandas; print(f'  Pandas: {pandas.__version__}')" 2>/dev/null || echo "  Pandas: not installed"
+        uv run python -c "from executorch.exir import to_edge; print('  ExecuTorch: installed')" 2>/dev/null || echo "  ExecuTorch: not installed (run task uv:sync:android)"
+
+  uv:lock:
+    desc: Update uv.lock file for reproducible installs
+    cmds:
+      - |
+        echo "Updating uv.lock..."
+        uv lock
+        echo "Lock file updated. Commit uv.lock for reproducible builds."
+
+  uv:clean:
+    desc: Remove virtual environment and cache
+    cmds:
+      - |
+        echo "Removing .venv..."
+        rm -rf .venv
+        echo "Removing .uv-cache..."
+        rm -rf .uv-cache
+        echo "Clean complete. Run 'task uv:sync' to recreate."
+
   bazel:install:
     desc: Install Bazel via Bazelisk (cross-platform version manager)
     vars:

@@ -23,27 +23,32 @@ RUN curl -L -o /opt/spark/jars/iceberg-spark-runtime-3.5_2.12-1.5.2.jar \
     curl -L -o /opt/spark/jars/aws-java-sdk-bundle-1.12.262.jar \
     https://repo1.maven.org/maven2/com/amazonaws/aws-java-sdk-bundle/1.12.262/aws-java-sdk-bundle-1.12.262.jar
 
-# Install Python ML dependencies
-# Note: Using pandas<2 for Feast compatibility
-RUN pip install --no-cache-dir \
+# Install uv for fast, reproducible Python package installation
+# Using the standalone installer for containers
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
+
+# Copy project files for dependency resolution
+COPY pyproject.toml uv.lock* /opt/spark/work-dir/
+
+# Install Python dependencies using uv with the spark-container group
+# This ensures pandas<2 compatibility with Feast
+WORKDIR /opt/spark/work-dir
+RUN uv pip install --system --no-cache \
     pyspark==3.5.0 \
     "feast[spark]==0.36.0" \
-    "kfp==2.9.0" \
-    mlflow>=2.0 \
-    torch>=2.0 \
-    lightning>=2.0 \
-    tensorboard>=2.0 \
+    "kfp>=2.9.0" \
+    "mlflow>=2.0" \
+    "torch>=2.5.0,<2.6" \
+    "lightning>=2.0" \
+    "tensorboard>=2.0" \
     "pandas>=1.5,<2" \
-    numpy>=1.24 \
-    pyarrow>=14.0 \
-    requests>=2.31 \
-    psutil>=5.9 \
-    pyyaml>=6.0 \
-    boto3>=1.34 \
+    "numpy>=1.24" \
+    "pyarrow>=14.0" \
+    "requests>=2.31" \
+    "psutil>=5.9" \
+    "pyyaml>=6.0" \
+    "boto3>=1.34" \
     "sqlalchemy>=1.4,<2"
-
-# Set working directory
-WORKDIR /opt/spark/work-dir
 
 # Ensure spark user can write to work directory
 RUN chown -R spark:spark /opt/spark/work-dir
