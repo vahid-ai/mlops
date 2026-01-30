@@ -261,6 +261,8 @@ def kronodroid_autoencoder_training_pipeline(
     )
 
     # Step 2: Optionally create LakeFS tag for reproducibility
+    # Note: Using hardcoded secret name because KFP v2 doesn't support
+    # pipeline parameters inside conditional blocks for kubernetes SDK calls
     with dsl.If(create_lakefs_tag == True):
         tag_task = lakefs_tag_model_data_op(
             lakefs_endpoint=lakefs_endpoint,
@@ -270,13 +272,14 @@ def kronodroid_autoencoder_training_pipeline(
             model_version=train_task.outputs["model_version"],
         )
 
-        tag_task.set_memory_limit("256Mi")
+        tag_task.set_memory_limit("512Mi")
+        tag_task.set_memory_request("256Mi")
         tag_task.set_cpu_limit("500m")
 
-        # Inject LakeFS credentials
+        # Inject LakeFS credentials (hardcoded secret name for KFP v2 compatibility)
         kubernetes.use_secret_as_env(
             task=tag_task,
-            secret_name=lakefs_secret_name,
+            secret_name="lakefs-credentials",
             secret_key_to_env={
                 "LAKEFS_ACCESS_KEY_ID": "LAKEFS_ACCESS_KEY_ID",
                 "LAKEFS_SECRET_ACCESS_KEY": "LAKEFS_SECRET_ACCESS_KEY",
@@ -429,6 +432,8 @@ def kronodroid_full_training_pipeline(
     )
 
     # Step 3: Create LakeFS tag
+    # Note: Using hardcoded secret name because KFP v2 doesn't support
+    # pipeline parameters inside conditional blocks for kubernetes SDK calls
     with dsl.If(create_lakefs_tag == True):
         tag_task = lakefs_tag_model_data_op(
             lakefs_endpoint=lakefs_endpoint,
@@ -438,11 +443,13 @@ def kronodroid_full_training_pipeline(
             model_version=train_task.outputs["model_version"],
         )
 
-        tag_task.set_memory_limit("256Mi")
+        tag_task.set_memory_limit("512Mi")
+        tag_task.set_memory_request("256Mi")
+        tag_task.set_cpu_limit("500m")
 
         kubernetes.use_secret_as_env(
             task=tag_task,
-            secret_name=lakefs_secret_name,
+            secret_name="lakefs-credentials",
             secret_key_to_env={
                 "LAKEFS_ACCESS_KEY_ID": "LAKEFS_ACCESS_KEY_ID",
                 "LAKEFS_SECRET_ACCESS_KEY": "LAKEFS_SECRET_ACCESS_KEY",

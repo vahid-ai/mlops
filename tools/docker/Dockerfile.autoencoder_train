@@ -1,10 +1,10 @@
 # Autoencoder training image with PyTorch, MLflow, and data connectors
 #
 # Build:
-#   docker build -t dfp-autoencoder-train:v7 -f tools/docker/Dockerfile.autoencoder_train .
+#   docker build -t dfp-autoencoder-train:v8 -f tools/docker/Dockerfile.autoencoder_train .
 #
 # For Kind clusters:
-#   kind load docker-image dfp-autoencoder-train:v7 --name dfp-kind
+#   kind load docker-image dfp-autoencoder-train:v8 --name dfp-kind
 #
 # Note: Using Python 3.11 for PySpark 3.5.x compatibility (3.12 has issues with PySpark)
 
@@ -47,7 +47,8 @@ RUN uv pip install --system --no-cache \
     "pyyaml>=6.0" \
     "boto3>=1.34" \
     "sqlalchemy>=2.0" \
-    "feast[spark]>=0.32"
+    "feast[spark]>=0.32" \
+    "kfp>=2.7,<3"
 
 # Default command (KFP will inject actual training code at runtime)
 CMD ["python", "-c", "print('Autoencoder training image ready')"]

@@ -33,7 +33,7 @@ class TrainAutoencoderOutput(NamedTuple):
 
 
 @dsl.component(
-    base_image="dfp-autoencoder-train:v7",
+    base_image="dfp-autoencoder-train:v8",
 )
 def train_kronodroid_autoencoder_op(
     # MLflow config
@@ -830,8 +830,7 @@ def train_kronodroid_autoencoder_op(
 
 
 @dsl.component(
-    base_image="python:3.11-slim",
-    packages_to_install=["requests"],
+    base_image="dfp-lakefs-component:v2",
 )
 def lakefs_tag_model_data_op(
     lakefs_endpoint: str,
