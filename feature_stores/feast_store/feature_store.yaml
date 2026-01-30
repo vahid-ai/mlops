@@ -16,7 +16,7 @@ offline_store:
     # LakeFS Iceberg catalog (Hadoop-based)
     spark.sql.catalog.lakefs: org.apache.iceberg.spark.SparkCatalog
     spark.sql.catalog.lakefs.type: hadoop
-    spark.sql.catalog.lakefs.warehouse: s3a://kronodroid/dev/iceberg
+    spark.sql.catalog.lakefs.warehouse: s3a://kronodroid/dev
     # S3A filesystem for LakeFS S3 gateway
     spark.hadoop.fs.s3a.impl: org.apache.hadoop.fs.s3a.S3AFileSystem
     spark.hadoop.fs.s3a.path.style.access: "true"
@@ -28,11 +28,11 @@ offline_store:
     # Maven packages for Iceberg + S3A (Spark 4.0 compatible)
     spark.jars.packages: org.apache.iceberg:iceberg-spark-runtime-4.0_2.13:1.10.1,org.apache.iceberg:iceberg-aws:1.10.1,org.apache.hadoop:hadoop-aws:3.4.1,software.amazon.awssdk:bundle:2.29.51
 
-# Online store using Redis for low-latency serving
-# Set REDIS_CONNECTION_STRING environment variable (format: redis://localhost:6379)
+# Online store using SQLite for local development
+# For production, configure Redis with proper host/port settings
 online_store:
-  type: redis
-  connection_string: ${REDIS_CONNECTION_STRING}
+  type: sqlite
+  path: data/online_store.db
 
 # Entity key serialization (v3 recommended)
 entity_key_serialization_version: 3

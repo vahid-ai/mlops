@@ -80,66 +80,102 @@ def lakefs_commit_merge_op(
     print(f"  Source branch: {source_branch}")
     print(f"  Target branch: {target_branch}")
 
-    # Step 1: Check if there are uncommitted changes
-    diff_url = f"{api_base}/api/v1/repositories/{lakefs_repository}/branches/{source_branch}/diff"
-    diff_resp = requests.get(diff_url, auth=auth)
+    # Step 1: Commit all staged changes (may need multiple commits for Iceberg metadata)
+    # Iceberg writes via S3A gateway can create additional metadata files after initial commit
+    commit_url = f"{api_base}/api/v1/repositories/{lakefs_repository}/branches/{source_branch}/commits"
+    commit_id = "no-changes"
+    max_commit_attempts = 5
 
-    if diff_resp.status_code != 200:
-        raise RuntimeError(f"Failed to get diff: {diff_resp.status_code} - {diff_resp.text}")
-
-    diff_data = diff_resp.json()
-    changes = diff_data.get("results", [])
-
-    if not changes:
-        print("No uncommitted changes found, skipping commit")
-        commit_id = "no-changes"
-    else:
-        print(f"Found {len(changes)} uncommitted changes")
-
-        # Step 2: Commit changes
-        commit_url = f"{api_base}/api/v1/repositories/{lakefs_repository}/branches/{source_branch}/commits"
+    for attempt in range(1, max_commit_attempts + 1):
         commit_data = {
-            "message": commit_message,
+            "message": f"{commit_message} (commit {attempt})" if attempt > 1 else commit_message,
             "metadata": {
                 "pipeline": pipeline_name,
                 "run_id": run_id,
                 "timestamp": datetime.utcnow().isoformat(),
+                "commit_attempt": str(attempt),
             },
         }
 
+        print(f"Commit attempt {attempt} on branch: {source_branch}")
         commit_resp = requests.post(commit_url, json=commit_data, auth=auth)
 
-        if commit_resp.status_code not in (200, 201):
+        if commit_resp.status_code in (200, 201):
+            commit_result = commit_resp.json()
+            commit_id = commit_result.get("id", "unknown")
+            print(f"Committed: {commit_id}")
+        elif commit_resp.status_code == 400 and "no changes" in commit_resp.text.lower():
+            print(f"No more changes to commit (branch is clean after {attempt - 1} commits)")
+            break
+        else:
             raise RuntimeError(f"Failed to commit: {commit_resp.status_code} - {commit_resp.text}")
 
-        commit_result = commit_resp.json()
-        commit_id = commit_result.get("id", "unknown")
-        print(f"Committed: {commit_id}")
-
-    # Step 3: Merge into target branch
-    merge_url = f"{api_base}/api/v1/repositories/{lakefs_repository}/refs/{source_branch}/merge/{target_branch}"
-    merge_data = {
-        "message": f"Merge {source_branch} into {target_branch}",
-        "metadata": {
-            "pipeline": pipeline_name,
-            "run_id": run_id,
-            "source_commit": commit_id,
-        },
+    # Step 2: Commit any uncommitted changes on the TARGET branch
+    # This handles cases where dlt or other processes write directly to target branch
+    target_commit_url = f"{api_base}/api/v1/repositories/{lakefs_repository}/branches/{target_branch}/commits"
+    target_commit_data = {
+        "message": f"Auto-commit before merge from {source_branch}",
+        "metadata": {"pipeline": pipeline_name, "run_id": run_id, "auto_commit": "true"},
     }
+    print(f"Checking target branch {target_branch} for uncommitted changes...")
+    target_commit_resp = requests.post(target_commit_url, json=target_commit_data, auth=auth)
+    if target_commit_resp.status_code in (200, 201):
+        target_commit_id = target_commit_resp.json().get("id", "unknown")
+        print(f"Committed target branch changes: {target_commit_id}")
+    elif "no changes" in target_commit_resp.text.lower():
+        print("Target branch is clean")
+    else:
+        print(f"Warning: Could not commit target branch: {target_commit_resp.text}")
 
-    merge_resp = requests.post(merge_url, json=merge_data, auth=auth)
+    # Step 3: Merge into target branch (with retry for dirty branch issues)
+    import time
+    merge_url = f"{api_base}/api/v1/repositories/{lakefs_repository}/refs/{source_branch}/merge/{target_branch}"
+    max_merge_attempts = 5
+    merge_commit_id = None
 
-    if merge_resp.status_code not in (200, 201):
-        # Check if it's a "nothing to merge" case
-        if "no changes" in merge_resp.text.lower() or merge_resp.status_code == 409:
+    for merge_attempt in range(1, max_merge_attempts + 1):
+        merge_data = {
+            "message": f"Merge {source_branch} into {target_branch}",
+            "metadata": {
+                "pipeline": pipeline_name,
+                "run_id": run_id,
+                "source_commit": commit_id,
+            },
+        }
+
+        print(f"Merge attempt {merge_attempt}")
+        merge_resp = requests.post(merge_url, json=merge_data, auth=auth)
+
+        if merge_resp.status_code in (200, 201):
+            merge_result = merge_resp.json()
+            merge_commit_id = merge_result.get("reference", "unknown")
+            print(f"Merged: {merge_commit_id}")
+            break
+        elif "no changes" in merge_resp.text.lower() or merge_resp.status_code == 409:
             print("Nothing to merge (branches are identical)")
             merge_commit_id = commit_id
+            break
+        elif "uncommitted" in merge_resp.text.lower() or "dirty" in merge_resp.text.lower():
+            # Try another commit before retrying merge
+            print(f"Dirty branch detected, attempting additional commit...")
+            time.sleep(1)  # Brief delay for consistency
+            extra_commit_data = {
+                "message": f"{commit_message} (cleanup commit {merge_attempt})",
+                "metadata": {"pipeline": pipeline_name, "run_id": run_id, "cleanup": "true"},
+            }
+            extra_resp = requests.post(commit_url, json=extra_commit_data, auth=auth)
+            if extra_resp.status_code in (200, 201):
+                commit_id = extra_resp.json().get("id", commit_id)
+                print(f"Extra commit: {commit_id}")
+            elif "no changes" in extra_resp.text.lower():
+                # No changes but merge still failed - wait and retry
+                print("No changes to commit, waiting before retry...")
+                time.sleep(2)
         else:
             raise RuntimeError(f"Failed to merge: {merge_resp.status_code} - {merge_resp.text}")
-    else:
-        merge_result = merge_resp.json()
-        merge_commit_id = merge_result.get("reference", "unknown")
-        print(f"Merged: {merge_commit_id}")
+
+    if merge_commit_id is None:
+        raise RuntimeError(f"Failed to merge after {max_merge_attempts} attempts")
 
     # Step 4: Optionally delete source branch
     if delete_source_branch and source_branch != target_branch:

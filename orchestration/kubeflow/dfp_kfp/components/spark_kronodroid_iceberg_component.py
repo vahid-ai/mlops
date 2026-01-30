@@ -61,24 +61,24 @@ spec:
         valueFrom:
           secretKeyRef:
             name: {minio_secret_name}
-            key: access-key
+            key: MINIO_ACCESS_KEY_ID
       - name: MINIO_SECRET_ACCESS_KEY
         valueFrom:
           secretKeyRef:
             name: {minio_secret_name}
-            key: secret-key
+            key: MINIO_SECRET_ACCESS_KEY
       - name: LAKEFS_ENDPOINT_URL
         value: "{lakefs_endpoint}"
       - name: LAKEFS_ACCESS_KEY_ID
         valueFrom:
           secretKeyRef:
             name: {lakefs_secret_name}
-            key: access-key
+            key: LAKEFS_ACCESS_KEY_ID
       - name: LAKEFS_SECRET_ACCESS_KEY
         valueFrom:
           secretKeyRef:
             name: {lakefs_secret_name}
-            key: secret-key
+            key: LAKEFS_SECRET_ACCESS_KEY
       - name: LAKEFS_REPOSITORY
         value: "{lakefs_repository}"
       - name: LAKEFS_BRANCH
@@ -94,24 +94,24 @@ spec:
         valueFrom:
           secretKeyRef:
             name: {minio_secret_name}
-            key: access-key
+            key: MINIO_ACCESS_KEY_ID
       - name: MINIO_SECRET_ACCESS_KEY
         valueFrom:
           secretKeyRef:
             name: {minio_secret_name}
-            key: secret-key
+            key: MINIO_SECRET_ACCESS_KEY
       - name: LAKEFS_ENDPOINT_URL
         value: "{lakefs_endpoint}"
       - name: LAKEFS_ACCESS_KEY_ID
         valueFrom:
           secretKeyRef:
             name: {lakefs_secret_name}
-            key: access-key
+            key: LAKEFS_ACCESS_KEY_ID
       - name: LAKEFS_SECRET_ACCESS_KEY
         valueFrom:
           secretKeyRef:
             name: {lakefs_secret_name}
-            key: secret-key
+            key: LAKEFS_SECRET_ACCESS_KEY
       - name: LAKEFS_REPOSITORY
         value: "{lakefs_repository}"
       - name: LAKEFS_BRANCH

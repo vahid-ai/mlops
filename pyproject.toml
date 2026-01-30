@@ -39,6 +39,9 @@ dependencies = [
     # Kubeflow / SparkOperator submission (tools/scripts/run_kronodroid_pipeline.py --transform-engine kubeflow)
     "kubernetes>=29.0",
     "pyyaml>=6.0",
+    "kfp>=2.15.2",
+    "kfp-kubernetes>=1.4.0",
+    "ipykernel>=7.1.0",
 ]
 
 [dependency-groups]

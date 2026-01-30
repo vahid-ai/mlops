@@ -1153,8 +1153,17 @@ def _commit_and_merge_lakefs(
     return True
 
 
-def run_feast_apply() -> bool:
+def run_feast_apply(
+    lakefs_endpoint: str | None = None,
+    redis_connection: str | None = None,
+    skip_source_validation: bool = False,
+) -> bool:
     """Apply Feast feature definitions.
+
+    Args:
+        lakefs_endpoint: LakeFS endpoint URL (default: http://localhost:8000)
+        redis_connection: Redis connection string (default: redis://localhost:6379)
+        skip_source_validation: Skip validation of data sources (useful if tables don't exist yet)
 
     Returns:
         True if successful
@@ -1165,13 +1174,37 @@ def run_feast_apply() -> bool:
 
     feast_dir = PROJECT_ROOT / "feature_stores" / "feast_store"
 
+    # Set up environment for Feast
+    # Use localhost endpoints for local Feast CLI (port-forwarded from k8s)
+    feast_env = os.environ.copy()
+    feast_env["LAKEFS_ENDPOINT_URL"] = lakefs_endpoint or os.getenv(
+        "LAKEFS_ENDPOINT_URL", "http://localhost:8000"
+    )
+    feast_env["REDIS_CONNECTION_STRING"] = redis_connection or os.getenv(
+        "REDIS_CONNECTION_STRING", "redis://localhost:6379"
+    )
+
+    # Ensure LakeFS credentials are set
+    if not feast_env.get("LAKEFS_ACCESS_KEY_ID") or not feast_env.get("LAKEFS_SECRET_ACCESS_KEY"):
+        print("WARNING: LAKEFS_ACCESS_KEY_ID/LAKEFS_SECRET_ACCESS_KEY not set")
+        print("  Feast may not be able to access LakeFS Iceberg tables")
+
+    print(f"  LakeFS endpoint: {feast_env['LAKEFS_ENDPOINT_URL']}")
+    print(f"  Redis connection: {feast_env['REDIS_CONNECTION_STRING']}")
+
     try:
+        cmd = ["feast", "apply"]
+        if skip_source_validation:
+            cmd.append("--skip-source-validation")
+            print("  Skipping source validation")
+
         result = subprocess.run(
-            ["feast", "apply"],
+            cmd,
             cwd=str(feast_dir),
             check=True,
             capture_output=True,
             text=True,
+            env=feast_env,
         )
         print(result.stdout)
         print("Feast feature definitions applied successfully")
@@ -1189,11 +1222,17 @@ def run_feast_apply() -> bool:
         return False
 
 
-def run_feast_materialize(days_back: int = 30) -> bool:
+def run_feast_materialize(
+    days_back: int = 30,
+    lakefs_endpoint: str | None = None,
+    redis_connection: str | None = None,
+) -> bool:
     """Materialize features to online store.
 
     Args:
         days_back: Number of days of features to materialize
+        lakefs_endpoint: LakeFS endpoint URL (default: http://localhost:8000)
+        redis_connection: Redis connection string (default: redis://localhost:6379)
 
     Returns:
         True if successful
@@ -1205,6 +1244,19 @@ def run_feast_materialize(days_back: int = 30) -> bool:
     feast_dir = PROJECT_ROOT / "feature_stores" / "feast_store"
     end_date = datetime.now()
     start_date = end_date - timedelta(days=days_back)
+
+    # Set up environment for Feast
+    feast_env = os.environ.copy()
+    feast_env["LAKEFS_ENDPOINT_URL"] = lakefs_endpoint or os.getenv(
+        "LAKEFS_ENDPOINT_URL", "http://localhost:8000"
+    )
+    feast_env["REDIS_CONNECTION_STRING"] = redis_connection or os.getenv(
+        "REDIS_CONNECTION_STRING", "redis://localhost:6379"
+    )
+
+    print(f"  LakeFS endpoint: {feast_env['LAKEFS_ENDPOINT_URL']}")
+    print(f"  Redis connection: {feast_env['REDIS_CONNECTION_STRING']}")
+    print(f"  Date range: {start_date.isoformat()} to {end_date.isoformat()}")
 
     try:
         result = subprocess.run(
@@ -1218,6 +1270,7 @@ def run_feast_materialize(days_back: int = 30) -> bool:
             check=True,
             capture_output=True,
             text=True,
+            env=feast_env,
         )
         print(result.stdout)
         print("Feature materialization completed successfully")
@@ -1351,6 +1404,11 @@ def main():
         help="Skip Feast apply step",
     )
     parser.add_argument(
+        "--skip-source-validation",
+        action="store_true",
+        help="Skip Feast source validation (use if Iceberg tables aren't accessible locally)",
+    )
+    parser.add_argument(
         "--materialize-only",
         action="store_true",
         help="Only run feast materialize",
@@ -1482,7 +1540,7 @@ def main():
 
         # Step 3: Feast apply
         if not args.skip_feast:
-            if not run_feast_apply():
+            if not run_feast_apply(skip_source_validation=args.skip_source_validation):
                 success = False
                 print("\nPipeline failed at Feast apply step")
                 sys.exit(1)
