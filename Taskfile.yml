@@ -642,12 +642,12 @@ tasks:
       MODEL_VERSION: '{{.MODEL_VERSION | default "latest"}}'
       TEST_DATA: '{{.TEST_DATA | default "./data/test_samples.npy"}}'
       TOLERANCE: '{{.TOLERANCE | default "0.01"}}'
-      MLFLOW_URI: '{{.MLFLOW_URI | default "http://localhost:5050"}}'
+      MLFLOW_URI: '{{.MLFLOW_URI | default "http://localhost:5000"}}'
     env:
       # MinIO/S3 credentials for MLflow artifact access
       AWS_ACCESS_KEY_ID: minioadmin
       AWS_SECRET_ACCESS_KEY: minioadmin
-      MLFLOW_S3_ENDPOINT_URL: http://localhost:19000
+      MLFLOW_S3_ENDPOINT_URL: http://localhost:9000
     cmds:
       - |
         uv run python tools/model_validation/validate_model.py \
@@ -668,7 +668,7 @@ tasks:
       # MinIO/S3 credentials for MLflow artifact access
       AWS_ACCESS_KEY_ID: minioadmin
       AWS_SECRET_ACCESS_KEY: minioadmin
-      MLFLOW_S3_ENDPOINT_URL: http://localhost:19000
+      MLFLOW_S3_ENDPOINT_URL: http://localhost:9000
     cmds:
       - |
         uv run python tools/model_validation/validate_model.py \
@@ -690,7 +690,7 @@ tasks:
       # MinIO/S3 credentials for MLflow artifact access
       AWS_ACCESS_KEY_ID: minioadmin
       AWS_SECRET_ACCESS_KEY: minioadmin
-      MLFLOW_S3_ENDPOINT_URL: http://localhost:19000
+      MLFLOW_S3_ENDPOINT_URL: http://localhost:9000
     cmds:
       - |
         if [ -z "{{.MODEL_NAME}}" ]; then

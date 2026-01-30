@@ -17,6 +17,95 @@ import torch.nn as nn
 logger = logging.getLogger(__name__)
 
 
+def _convert_lightning_to_pytorch(lightning_model: nn.Module) -> nn.Module:
+    """Convert a Lightning model to a pure PyTorch model.
+
+    Lightning models saved via MLflow can have issues during inference
+    due to how the class is pickled. This function extracts the state dict
+    and loads it into a pure PyTorch equivalent.
+
+    Args:
+        lightning_model: The loaded Lightning model.
+
+    Returns:
+        A pure PyTorch model with the same weights.
+    """
+    # Extract state dict
+    state_dict = lightning_model.state_dict()
+
+    # Check if it has encoder/decoder structure (autoencoder)
+    has_encoder = any(k.startswith("encoder.") for k in state_dict.keys())
+    has_decoder = any(k.startswith("decoder.") for k in state_dict.keys())
+
+    if has_encoder and has_decoder:
+        # Infer architecture from state dict
+        # Encoder structure: Linear, ReLU, BatchNorm1d, Linear, ReLU, BatchNorm1d, ..., Linear
+        # Layer indices: 0=Linear, 1=ReLU, 2=BatchNorm, 3=Linear, 4=ReLU, 5=BatchNorm, 6=Linear (final)
+        # Linear layers have 2D weights, BatchNorm has 1D weights
+
+        # Find all Linear layer indices in encoder (2D weight tensors)
+        encoder_linear_indices = sorted([
+            int(k.split(".")[1])
+            for k in state_dict.keys()
+            if k.startswith("encoder.") and k.endswith(".weight") and state_dict[k].dim() == 2
+        ])
+
+        # Get dimensions
+        input_dim = state_dict["encoder.0.weight"].shape[1]
+        # Last encoder linear is the latent projection
+        last_encoder_idx = encoder_linear_indices[-1]
+        latent_dim = state_dict[f"encoder.{last_encoder_idx}.weight"].shape[0]
+
+        # Hidden dims are from all encoder linears except the last one
+        hidden_dims = []
+        for idx in encoder_linear_indices[:-1]:
+            hidden_dims.append(state_dict[f"encoder.{idx}.weight"].shape[0])
+
+        logger.info(f"Detected autoencoder: input={input_dim}, hidden={hidden_dims}, latent={latent_dim}")
+
+        class PureAutoencoder(nn.Module):
+            def __init__(self, input_dim, latent_dim, hidden_dims):
+                super().__init__()
+                # Build encoder
+                encoder_layers = []
+                prev_dim = input_dim
+                for h_dim in hidden_dims:
+                    encoder_layers.extend([
+                        nn.Linear(prev_dim, h_dim),
+                        nn.ReLU(),
+                        nn.BatchNorm1d(h_dim),
+                    ])
+                    prev_dim = h_dim
+                encoder_layers.append(nn.Linear(prev_dim, latent_dim))
+                self.encoder = nn.Sequential(*encoder_layers)
+
+                # Build decoder
+                decoder_layers = []
+                prev_dim = latent_dim
+                for h_dim in reversed(hidden_dims):
+                    decoder_layers.extend([
+                        nn.Linear(prev_dim, h_dim),
+                        nn.ReLU(),
+                        nn.BatchNorm1d(h_dim),
+                    ])
+                    prev_dim = h_dim
+                decoder_layers.append(nn.Linear(prev_dim, input_dim))
+                self.decoder = nn.Sequential(*decoder_layers)
+
+            def forward(self, x):
+                return self.decoder(self.encoder(x))
+
+        model = PureAutoencoder(input_dim, latent_dim, tuple(hidden_dims))
+        # Filter state dict to only encoder/decoder
+        filtered_state = {k: v for k, v in state_dict.items() if k.startswith(("encoder", "decoder"))}
+        model.load_state_dict(filtered_state)
+        return model
+
+    # Fallback: return original model
+    logger.warning("Could not convert Lightning model, returning original")
+    return lightning_model
+
+
 @dataclass
 class ModelMetadata:
     """Metadata about a model fetched from MLflow."""
@@ -82,6 +171,12 @@ class MLflowExecuTorchClient:
 
         # Load model
         model = self._mlflow.pytorch.load_model(model_uri)
+
+        # Convert Lightning models to pure PyTorch for compatibility
+        model_class_name = type(model).__name__
+        if "Lightning" in model_class_name or hasattr(model, "trainer"):
+            logger.info(f"Converting Lightning model ({model_class_name}) to pure PyTorch")
+            model = _convert_lightning_to_pytorch(model)
 
         # Get metadata
         if stage:
