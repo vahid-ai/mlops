@@ -3,13 +3,13 @@
   "input_shapes": [
     [
       1,
-      289
+      50
     ]
   ],
   "output_shapes": [
     [
       1,
-      289
+      50
     ]
   ],
   "input_dtypes": [
@@ -21,6 +21,6 @@
   "backend": "xnnpack",
   "quantization": "none",
   "export_version": "1.0.0",
-  "file_size_bytes": 394944,
+  "file_size_bytes": 141056,
   "optimize": true
 }
