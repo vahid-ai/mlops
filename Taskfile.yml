@@ -828,3 +828,282 @@ tasks:
         }
         echo "Results saved to {{.OUTPUT_DIR}}/"
         ls -la "{{.OUTPUT_DIR}}/"
+
+  # ===========================================================================
+  # Secrets Management Tasks
+  # ===========================================================================
+
+  secrets:sync:
+    desc: Sync secrets from dfp namespace to kubeflow namespace (and vice versa)
+    vars:
+      DFP_NAMESPACE: '{{.NAMESPACE | default "dfp"}}'
+      KFP_NAMESPACE: '{{.KFP_NAMESPACE | default "kubeflow"}}'
+    cmds:
+      - |
+        set -e
+        echo "=== Syncing secrets between namespaces ==="
+        echo ""
+
+        # Load credentials from .env file
+        if [ -f .env ]; then
+          source .env
+        fi
+
+        # MinIO credentials (hardcoded in manifests)
+        MINIO_ACCESS_KEY="${MINIO_ACCESS_KEY_ID:-minioadmin}"
+        MINIO_SECRET_KEY="${MINIO_SECRET_ACCESS_KEY:-minioadmin}"
+
+        # LakeFS credentials (from .env or environment)
+        LAKEFS_ACCESS_KEY="${LAKEFS_ACCESS_KEY_ID:-}"
+        LAKEFS_SECRET_KEY="${LAKEFS_SECRET_ACCESS_KEY:-}"
+
+        if [ -z "$LAKEFS_ACCESS_KEY" ] || [ -z "$LAKEFS_SECRET_KEY" ]; then
+          echo "ERROR: LAKEFS_ACCESS_KEY_ID and LAKEFS_SECRET_ACCESS_KEY must be set"
+          echo "Run 'task lakefs:keys' to generate new credentials"
+          exit 1
+        fi
+
+        echo "Creating/updating secrets in {{.DFP_NAMESPACE}} namespace..."
+
+        # Create minio-credentials in dfp namespace
+        kubectl create secret generic minio-credentials \
+          --namespace="{{.DFP_NAMESPACE}}" \
+          --from-literal=MINIO_ACCESS_KEY_ID="$MINIO_ACCESS_KEY" \
+          --from-literal=MINIO_SECRET_ACCESS_KEY="$MINIO_SECRET_KEY" \
+          --from-literal=AWS_ACCESS_KEY_ID="$MINIO_ACCESS_KEY" \
+          --from-literal=AWS_SECRET_ACCESS_KEY="$MINIO_SECRET_KEY" \
+          --dry-run=client -o yaml | kubectl apply -f -
+
+        # Create lakefs-credentials in dfp namespace
+        kubectl create secret generic lakefs-credentials \
+          --namespace="{{.DFP_NAMESPACE}}" \
+          --from-literal=LAKEFS_ACCESS_KEY_ID="$LAKEFS_ACCESS_KEY" \
+          --from-literal=LAKEFS_SECRET_ACCESS_KEY="$LAKEFS_SECRET_KEY" \
+          --dry-run=client -o yaml | kubectl apply -f -
+
+        echo ""
+        echo "Creating/updating secrets in {{.KFP_NAMESPACE}} namespace..."
+
+        # Create minio-credentials in kubeflow namespace
+        kubectl create secret generic minio-credentials \
+          --namespace="{{.KFP_NAMESPACE}}" \
+          --from-literal=MINIO_ACCESS_KEY_ID="$MINIO_ACCESS_KEY" \
+          --from-literal=MINIO_SECRET_ACCESS_KEY="$MINIO_SECRET_KEY" \
+          --from-literal=AWS_ACCESS_KEY_ID="$MINIO_ACCESS_KEY" \
+          --from-literal=AWS_SECRET_ACCESS_KEY="$MINIO_SECRET_KEY" \
+          --dry-run=client -o yaml | kubectl apply -f -
+
+        # Create lakefs-credentials in kubeflow namespace
+        kubectl create secret generic lakefs-credentials \
+          --namespace="{{.KFP_NAMESPACE}}" \
+          --from-literal=LAKEFS_ACCESS_KEY_ID="$LAKEFS_ACCESS_KEY" \
+          --from-literal=LAKEFS_SECRET_ACCESS_KEY="$LAKEFS_SECRET_KEY" \
+          --dry-run=client -o yaml | kubectl apply -f -
+
+        echo ""
+        echo "=== Secrets synced successfully ==="
+        task secrets:verify
+
+  secrets:verify:
+    desc: Verify that required secrets exist in both dfp and kubeflow namespaces
+    vars:
+      DFP_NAMESPACE: '{{.NAMESPACE | default "dfp"}}'
+      KFP_NAMESPACE: '{{.KFP_NAMESPACE | default "kubeflow"}}'
+    cmds:
+      - |
+        echo "=== Verifying secrets ==="
+        echo ""
+
+        ERRORS=0
+
+        for NS in "{{.DFP_NAMESPACE}}" "{{.KFP_NAMESPACE}}"; do
+          echo "Namespace: $NS"
+
+          # Check minio-credentials
+          if kubectl get secret minio-credentials -n "$NS" >/dev/null 2>&1; then
+            KEYS=$(kubectl get secret minio-credentials -n "$NS" -o jsonpath='{.data}' | jq -r 'keys | join(", ")')
+            echo "  ✓ minio-credentials: $KEYS"
+          else
+            echo "  ✗ minio-credentials: NOT FOUND"
+            ERRORS=$((ERRORS + 1))
+          fi
+
+          # Check lakefs-credentials
+          if kubectl get secret lakefs-credentials -n "$NS" >/dev/null 2>&1; then
+            KEYS=$(kubectl get secret lakefs-credentials -n "$NS" -o jsonpath='{.data}' | jq -r 'keys | join(", ")')
+            echo "  ✓ lakefs-credentials: $KEYS"
+          else
+            echo "  ✗ lakefs-credentials: NOT FOUND"
+            ERRORS=$((ERRORS + 1))
+          fi
+
+          echo ""
+        done
+
+        if [ $ERRORS -gt 0 ]; then
+          echo "ERROR: $ERRORS missing secrets. Run 'task secrets:sync' to create them."
+          exit 1
+        fi
+
+        echo "All secrets verified successfully!"
+
+  secrets:show:
+    desc: Show decoded secret values (for debugging)
+    vars:
+      SECRET: '{{.SECRET | default ""}}'
+      NAMESPACE: '{{.NAMESPACE | default "dfp"}}'
+    cmds:
+      - |
+        if [ -z "{{.SECRET}}" ]; then
+          echo "Usage: task secrets:show SECRET=<secret-name> [NAMESPACE=<namespace>]"
+          echo ""
+          echo "Available secrets in {{.NAMESPACE}}:"
+          kubectl get secrets -n "{{.NAMESPACE}}" --no-headers | awk '{print "  - "$1}'
+          exit 0
+        fi
+
+        echo "Secret: {{.SECRET}} (namespace: {{.NAMESPACE}})"
+        echo ""
+        kubectl get secret "{{.SECRET}}" -n "{{.NAMESPACE}}" -o json | \
+          jq -r '.data | to_entries[] | "\(.key): \(.value | @base64d)"'
+
+  # ===========================================================================
+  # Pipeline Docker Image Tasks
+  # ===========================================================================
+
+  autoencoder-image:build:
+    desc: Build the autoencoder training Docker image
+    vars:
+      IMAGE_TAG: '{{.IMAGE_TAG | default "v6"}}'
+    cmds:
+      - docker build -t "dfp-autoencoder-train:{{.IMAGE_TAG}}" -f tools/docker/Dockerfile.autoencoder_train .
+
+  autoencoder-image:load:
+    desc: Load autoencoder training image into kind cluster
+    vars:
+      IMAGE_TAG: '{{.IMAGE_TAG | default "v6"}}'
+    cmds:
+      - kind load docker-image "dfp-autoencoder-train:{{.IMAGE_TAG}}" --name "{{.CLUSTER_NAME}}"
+
+  autoencoder-image:
+    desc: Build and load autoencoder training image into kind
+    cmds:
+      - task: autoencoder-image:build
+      - task: autoencoder-image:load
+
+  pipeline-images:
+    desc: Build and load all pipeline images (spark + autoencoder)
+    cmds:
+      - task: spark-image
+      - task: autoencoder-image
+
+  pipeline-images:verify:
+    desc: Verify pipeline images are loaded in kind cluster
+    cmds:
+      - |
+        echo "=== Checking pipeline images in kind cluster ==="
+        echo ""
+
+        IMAGES=("dfp-spark:latest" "dfp-autoencoder-train:v6")
+        ERRORS=0
+
+        for IMG in "${IMAGES[@]}"; do
+          if docker exec "{{.CLUSTER_NAME}}-control-plane" crictl images | grep -q "${IMG%:*}"; then
+            echo "  ✓ $IMG: loaded"
+          else
+            echo "  ✗ $IMG: NOT FOUND"
+            ERRORS=$((ERRORS + 1))
+          fi
+        done
+
+        echo ""
+        if [ $ERRORS -gt 0 ]; then
+          echo "Run 'task pipeline-images' to build and load missing images."
+          exit 1
+        fi
+        echo "All pipeline images verified!"
+
+  # ===========================================================================
+  # Pipeline Execution Tasks
+  # ===========================================================================
+
+  pipeline:spark:
+    desc: Run Spark Iceberg transformation pipeline (direct SparkApplication)
+    vars:
+      BRANCH: '{{.BRANCH | default "dev"}}'
+      DESTINATION: '{{.DESTINATION | default "lakefs"}}'
+      TEST_MODE: '{{.TEST_MODE | default "false"}}'
+    cmds:
+      - |
+        ARGS="--branch {{.BRANCH}} --transform-engine kubeflow --destination {{.DESTINATION}}"
+
+        if [ "{{.TEST_MODE}}" = "true" ]; then
+          ARGS="$ARGS --test-mode"
+        fi
+
+        # Skip ingestion if data already exists
+        ARGS="$ARGS --skip-ingestion --skip-feast"
+
+        echo "Running Spark transformation pipeline..."
+        echo "  Branch: {{.BRANCH}}"
+        echo "  Destination: {{.DESTINATION}}"
+        echo ""
+
+        uv run tools/scripts/run_kronodroid_pipeline.py $ARGS
+
+  pipeline:spark:kfp:
+    desc: Run Spark Iceberg transformation pipeline via KFP client
+    vars:
+      BRANCH: '{{.BRANCH | default "dev"}}'
+      DESTINATION: '{{.DESTINATION | default "lakefs"}}'
+    cmds:
+      - |
+        echo "Ensuring secrets are synced..."
+        task secrets:sync
+
+        echo ""
+        echo "Running Spark transformation pipeline via KFP..."
+        echo "  Branch: {{.BRANCH}}"
+        echo "  Destination: {{.DESTINATION}}"
+        echo ""
+
+        uv run tools/scripts/run_kronodroid_pipeline.py \
+          --branch "{{.BRANCH}}" \
+          --transform-engine kubeflow \
+          --destination "{{.DESTINATION}}" \
+          --use-kfp-client \
+          --skip-ingestion \
+          --skip-feast
+
+  pipeline:full:
+    desc: Run full pipeline (ingest -> transform -> feast)
+    vars:
+      BRANCH: '{{.BRANCH | default "dev"}}'
+      DESTINATION: '{{.DESTINATION | default "lakefs"}}'
+    cmds:
+      - |
+        echo "Ensuring secrets are synced..."
+        task secrets:sync
+
+        echo ""
+        echo "Running full pipeline..."
+        uv run tools/scripts/run_kronodroid_pipeline.py \
+          --branch "{{.BRANCH}}" \
+          --transform-engine kubeflow \
+          --destination "{{.DESTINATION}}"
+
+  pipeline:setup:
+    desc: Complete pipeline setup (sync secrets, build images, verify)
+    cmds:
+      - task: secrets:sync
+      - task: pipeline-images
+      - task: pipeline-images:verify
+      - task: secrets:verify
+      - |
+        echo ""
+        echo "=== Pipeline setup complete ==="
+        echo ""
+        echo "You can now run pipelines with:"
+        echo "  task pipeline:spark BRANCH=dev          # Direct SparkApplication"
+        echo "  task pipeline:spark:kfp BRANCH=dev      # Via KFP client"
+        echo "  task pipeline:full BRANCH=dev           # Full pipeline"

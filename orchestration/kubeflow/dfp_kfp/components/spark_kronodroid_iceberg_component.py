@@ -122,7 +122,7 @@ spec:
     spark.sql.iceberg.write.avro.compression-codec: snappy
     spark.sql.catalog.{catalog_name}: org.apache.iceberg.spark.SparkCatalog
     spark.sql.catalog.{catalog_name}.type: hadoop
-    spark.sql.catalog.{catalog_name}.warehouse: "s3a://{lakefs_repository}/{lakefs_branch}"
+    spark.sql.catalog.{catalog_name}.warehouse: "s3a://{lakefs_repository}/{target_branch}/iceberg"
     spark.hadoop.fs.s3a.impl: org.apache.hadoop.fs.s3a.S3AFileSystem
     spark.hadoop.fs.s3a.path.style.access: "true"
     spark.hadoop.fs.s3a.connection.ssl.enabled: "false"
@@ -493,7 +493,7 @@ spec:
     spark.sql.iceberg.write.avro.compression-codec: snappy
     spark.sql.catalog.{catalog_name}: org.apache.iceberg.spark.SparkCatalog
     spark.sql.catalog.{catalog_name}.type: hadoop
-    spark.sql.catalog.{catalog_name}.warehouse: "s3a://{lakefs_repository}/{lakefs_branch}"
+    spark.sql.catalog.{catalog_name}.warehouse: "s3a://{lakefs_repository}/{target_branch}/iceberg"
     spark.hadoop.fs.s3a.impl: org.apache.hadoop.fs.s3a.S3AFileSystem
     spark.hadoop.fs.s3a.path.style.access: "true"
     spark.hadoop.fs.s3a.connection.ssl.enabled: "false"

@@ -699,11 +699,9 @@ def _run_kubeflow_via_sparkapplication(
     # Build SparkApplication manifest
     # Use Hadoop-based Iceberg catalog since LakeFS OSS doesn't include REST catalog
     catalog_name = "lakefs"
-    # IMPORTANT: Use the per-run branch for the warehouse path, not the target branch.
-    # Iceberg's Hadoop catalog derives table paths from the warehouse, and if the Spark job
-    # writes to a different branch than what's in the warehouse path, Iceberg will raise:
-    #   "Cannot set a custom location for a path-based table"
-    warehouse_path = f"s3a://{lakefs_repository}/{per_run_branch}/iceberg"
+    # Use target branch for warehouse path - after Spark job completes, changes are merged
+    # back into the target branch (e.g., dev), so data should be accessible via target branch path
+    warehouse_path = f"s3a://{lakefs_repository}/{lakefs_branch}/iceberg"
 
     minio_access_key = os.getenv("MINIO_ACCESS_KEY_ID", "")
     minio_secret_key = os.getenv("MINIO_SECRET_ACCESS_KEY", "")
@@ -1324,6 +1322,104 @@ def commit_to_lakefs(branch: str, message: str) -> bool:
         return False
 
 
+def run_autoencoder_training(
+    lakefs_branch: str = "dev",
+    kfp_host: str | None = None,
+    max_epochs: int = 10,
+    batch_size: int = 512,
+    learning_rate: float = 0.001,
+    latent_dim: int = 16,
+    timeout_seconds: int = 3600,
+) -> bool:
+    """Train the Kronodroid autoencoder via Kubeflow Pipeline.
+
+    Assumes data has already been ingested and transformed into Iceberg tables.
+
+    Args:
+        lakefs_branch: LakeFS branch/ref containing the training data
+        kfp_host: Kubeflow Pipelines host URL
+        max_epochs: Maximum training epochs
+        batch_size: Training batch size
+        learning_rate: Optimizer learning rate
+        latent_dim: Autoencoder latent space dimension
+        timeout_seconds: Maximum time to wait for training completion
+
+    Returns:
+        True if training succeeded
+    """
+    print("\n" + "=" * 60)
+    print("Training Kronodroid Autoencoder")
+    print("=" * 60)
+    print(f"  LakeFS branch: {lakefs_branch}")
+    print(f"  Max epochs: {max_epochs}")
+    print(f"  Batch size: {batch_size}")
+    print(f"  Learning rate: {learning_rate}")
+    print(f"  Latent dim: {latent_dim}")
+    print(f"  Timeout: {timeout_seconds}s")
+
+    try:
+        import kfp
+
+        from orchestration.kubeflow.dfp_kfp.pipelines.kronodroid_autoencoder_training_pipeline import (
+            kronodroid_autoencoder_training_pipeline,
+        )
+
+        # Determine KFP host
+        if kfp_host is None:
+            kfp_host = os.getenv("KFP_HOST", "http://localhost:8080")
+        print(f"  KFP host: {kfp_host}")
+
+        # Construct cluster-internal endpoints
+        lakefs_endpoint = "http://lakefs.dfp:8000"
+        minio_endpoint = "http://minio.dfp:9000"
+        mlflow_tracking_uri = "http://mlflow.dfp:5000"
+
+        client = kfp.Client(host=kfp_host)
+
+        # Create or get experiment
+        experiment_name = "kronodroid-autoencoder"
+        try:
+            experiment = client.get_experiment(experiment_name=experiment_name)
+        except Exception:
+            experiment = client.create_experiment(name=experiment_name)
+        print(f"Experiment details: {kfp_host}/#/experiments/details/{experiment.experiment_id}")
+
+        # Submit run
+        run = client.create_run_from_pipeline_func(
+            kronodroid_autoencoder_training_pipeline,
+            experiment_name=experiment_name,
+            arguments={
+                "lakefs_ref": lakefs_branch,
+                "lakefs_endpoint": lakefs_endpoint,
+                "minio_endpoint": minio_endpoint,
+                "mlflow_tracking_uri": mlflow_tracking_uri,
+                "max_epochs": max_epochs,
+                "batch_size": batch_size,
+                "learning_rate": learning_rate,
+                "latent_dim": latent_dim,
+            },
+        )
+
+        print(f"Run details: {kfp_host}/#/runs/details/{run.run_id}")
+        print(f"  Submitted KFP run: {run.run_id}")
+
+        # Wait for completion
+        result = client.wait_for_run_completion(run.run_id, timeout=timeout_seconds)
+
+        if result.state == "SUCCEEDED":
+            print("Autoencoder training completed successfully")
+            return True
+        else:
+            print(f"ERROR: Training run failed with status: {result.state}")
+            return False
+
+    except Exception as e:
+        print(f"ERROR: Autoencoder training failed: {e}")
+        import traceback
+        traceback.print_exc()
+        return False
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Run Kronodroid data pipeline",
@@ -1447,6 +1543,42 @@ def main():
         default=0,
         help="Limit rows per source table for testing (0 = no limit, e.g., 1000 for quick tests)",
     )
+    # Autoencoder training options
+    parser.add_argument(
+        "--train-autoencoder",
+        action="store_true",
+        help="Train the autoencoder model (assumes data already ingested and transformed)",
+    )
+    parser.add_argument(
+        "--max-epochs",
+        type=int,
+        default=10,
+        help="Maximum training epochs for autoencoder (default: 10)",
+    )
+    parser.add_argument(
+        "--batch-size",
+        type=int,
+        default=512,
+        help="Training batch size for autoencoder (default: 512)",
+    )
+    parser.add_argument(
+        "--learning-rate",
+        type=float,
+        default=0.001,
+        help="Learning rate for autoencoder training (default: 0.001)",
+    )
+    parser.add_argument(
+        "--latent-dim",
+        type=int,
+        default=16,
+        help="Autoencoder latent dimension (default: 16)",
+    )
+    parser.add_argument(
+        "--training-timeout",
+        type=int,
+        default=3600,
+        help="Timeout in seconds for training job (default: 3600)",
+    )
 
     args = parser.parse_args()
 
@@ -1484,6 +1616,17 @@ def main():
 
     if args.materialize_only:
         success = run_feast_materialize(args.materialize_days)
+    elif args.train_autoencoder:
+        # Train autoencoder only (assumes data already ingested and transformed)
+        success = run_autoencoder_training(
+            lakefs_branch=args.branch,
+            kfp_host=args.kfp_host,
+            max_epochs=args.max_epochs,
+            batch_size=args.batch_size,
+            learning_rate=args.learning_rate,
+            latent_dim=args.latent_dim,
+            timeout_seconds=args.training_timeout,
+        )
     else:
         # Step 1: dlt ingestion
         if not args.skip_ingestion:
