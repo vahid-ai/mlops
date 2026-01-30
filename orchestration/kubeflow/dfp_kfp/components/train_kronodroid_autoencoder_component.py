@@ -33,7 +33,7 @@ class TrainAutoencoderOutput(NamedTuple):
 
 
 @dsl.component(
-    base_image="dfp-autoencoder-train:v6",
+    base_image="dfp-autoencoder-train:v7",
 )
 def train_kronodroid_autoencoder_op(
     # MLflow config
