@@ -547,6 +547,11 @@ tasks:
       TEST_DATA: '{{.TEST_DATA | default "./data/test_samples.npy"}}'
       TOLERANCE: '{{.TOLERANCE | default "0.01"}}'
       MLFLOW_URI: '{{.MLFLOW_URI | default "http://localhost:5050"}}'
+    env:
+      # MinIO/S3 credentials for MLflow artifact access
+      AWS_ACCESS_KEY_ID: minioadmin
+      AWS_SECRET_ACCESS_KEY: minioadmin
+      MLFLOW_S3_ENDPOINT_URL: http://localhost:19000
     cmds:
       - |
         uv run python tools/model_validation/validate_model.py \
@@ -563,6 +568,11 @@ tasks:
       MODEL_VERSION: '{{.MODEL_VERSION | default "latest"}}'
       TEST_DATA: '{{.TEST_DATA | default "./data/test_samples.npy"}}'
       TOLERANCE: '{{.TOLERANCE | default "0.01"}}'
+    env:
+      # MinIO/S3 credentials for MLflow artifact access
+      AWS_ACCESS_KEY_ID: minioadmin
+      AWS_SECRET_ACCESS_KEY: minioadmin
+      MLFLOW_S3_ENDPOINT_URL: http://localhost:19000
     cmds:
       - |
         uv run python tools/model_validation/validate_model.py \
@@ -580,6 +590,11 @@ tasks:
       OUTPUT: '{{.OUTPUT | default "./models/model.pte"}}'
       BACKEND: '{{.BACKEND | default "xnnpack"}}'
       QUANTIZATION: '{{.QUANTIZATION | default "none"}}'
+    env:
+      # MinIO/S3 credentials for MLflow artifact access
+      AWS_ACCESS_KEY_ID: minioadmin
+      AWS_SECRET_ACCESS_KEY: minioadmin
+      MLFLOW_S3_ENDPOINT_URL: http://localhost:19000
     cmds:
       - |
         if [ -z "{{.MODEL_NAME}}" ]; then
@@ -599,6 +614,11 @@ tasks:
     desc: List available quantization configurations
     cmds:
       - uv run python -m runtimes.executorch.export.cli list-quantization
+
+  model:export:test:
+    desc: Test ExecuTorch export pipeline with a simple model (no MLflow required)
+    cmds:
+      - uv run tools/model_validation/test_export.py
 
   model:compare:
     desc: Compare inference results from different runtimes

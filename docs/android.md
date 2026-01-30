@@ -270,6 +270,21 @@ use_repo(maven, "maven")
 
 ### Prerequisites
 
+#### Python Version Requirement
+
+> **Important**: ExecuTorch requires **Python 3.10, 3.11, or 3.12**. Python 3.13 is not yet supported.
+
+If you're using Python 3.13, create a separate virtual environment for Android/ExecuTorch work:
+
+```bash
+# Create venv with Python 3.12 for ExecuTorch
+uv venv --python 3.12 .venv-android
+source .venv-android/bin/activate
+uv sync --group android
+```
+
+#### Bazel Installation
+
 1. **Install Bazel** via Bazelisk (cross-platform version manager):
 
    ```bash
@@ -552,6 +567,73 @@ deps = [
 
 ### Common Issues
 
+#### ExecuTorch Not Installing (Python 3.13)
+
+```
+error: Distribution `executorch` can't be installed because it doesn't have a
+wheel for the current platform
+hint: You're using CPython 3.13 (`cp313`), but `executorch` only has wheels
+with the following Python ABI tags: `cp310`, `cp311`, `cp312`
+```
+
+**Fix**: ExecuTorch requires Python 3.10-3.12. Create a separate environment:
+
+```bash
+# Create Python 3.12 environment
+uv venv --python 3.12 .venv-android
+source .venv-android/bin/activate
+uv sync --group android
+
+# Verify
+python --version  # Should be 3.12.x
+uv pip show executorch
+```
+
+#### PyTorch Version Mismatch When Loading Models
+
+```
+WARNING mlflow.pytorch: Stored model version '2.4.1' does not match installed
+PyTorch version '2.9.1'
+TypeError: code() argument 13 must be str, not int
+```
+
+**Fix**: The model was saved with a different PyTorch version. Options:
+
+1. **Re-train the model** with your current PyTorch version
+2. **Install matching PyTorch version**:
+   ```bash
+   uv pip install torch==2.4.1
+   ```
+3. **Re-save with state_dict** (if you have model code):
+   ```python
+   # Load with weights_only to avoid pickle issues
+   model.load_state_dict(torch.load("model.pth", weights_only=True))
+   # Re-save and re-register in MLflow
+   ```
+
+#### MLflow S3/MinIO Credentials Error
+
+```
+botocore.exceptions.NoCredentialsError: Unable to locate credentials
+```
+
+**Fix**: The task commands now auto-configure MinIO credentials. If running manually:
+
+```bash
+export AWS_ACCESS_KEY_ID=minioadmin
+export AWS_SECRET_ACCESS_KEY=minioadmin
+export MLFLOW_S3_ENDPOINT_URL=http://localhost:19000
+
+# Then run your command
+uv run python -m runtimes.executorch.export.cli export ...
+```
+
+Or use the task commands which set these automatically:
+
+```bash
+task model:export MODEL_NAME=my_model
+```
+
 #### "no such package" Error
 
 ```
@@ -633,7 +715,22 @@ The project includes a complete workflow for validating ExecuTorch models agains
 
 ### Export Package (`runtimes/executorch/export/`)
 
-The export package provides tools for converting PyTorch models to ExecuTorch format:
+The export package provides tools for converting PyTorch models to ExecuTorch format.
+
+#### Installation
+
+```bash
+# Requires Python 3.10-3.12 (Python 3.13 not supported)
+uv sync --group android
+
+# Verify installation
+uv pip show executorch
+
+# Test the export pipeline (creates a simple model and exports it)
+uv run python tools/model_validation/test_export.py
+```
+
+#### Python API
 
 ```python
 from runtimes.executorch.export import (
@@ -771,6 +868,17 @@ task android:results:pull OUTPUT_DIR=./results
 ---
 
 ## End-to-End Validation Workflow
+
+### Prerequisites Checklist
+
+Before running the validation workflow, ensure:
+
+- [ ] **Python 3.10-3.12** (ExecuTorch doesn't support 3.13 yet)
+- [ ] **ExecuTorch installed**: `uv sync --group android`
+- [ ] **Kind cluster running**: `task status`
+- [ ] **Port-forwards active**: `task port-forward`
+- [ ] **Model registered in MLflow** at http://localhost:5050
+- [ ] **Model saved with compatible PyTorch version**
 
 ### Step-by-Step Guide
 

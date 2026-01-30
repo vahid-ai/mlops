@@ -41,3 +41,10 @@ dev = [
     "pytest>=8.0",
     "pytest-cov>=4.1",
 ]
+
+android = [
+    # ExecuTorch for PyTorch mobile deployment
+    # Install with: uv sync --group android
+    # Note: ExecuTorch requires specific PyTorch version compatibility
+    "executorch>=0.4.0",
+]
