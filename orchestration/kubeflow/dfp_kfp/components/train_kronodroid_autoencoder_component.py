@@ -33,7 +33,7 @@ class TrainAutoencoderOutput(NamedTuple):
 
 
 @dsl.component(
-    base_image="dfp-autoencoder-train:v6",
+    base_image="dfp-autoencoder-train:v8",
 )
 def train_kronodroid_autoencoder_op(
     # MLflow config
@@ -493,9 +493,21 @@ def train_kronodroid_autoencoder_op(
         spark_conf = feast_config.get("offline_store", {}).get("spark_conf", {})
         logger.info("Creating Spark session with Iceberg config from Feast")
 
+        # Override JAR packages to use PySpark 3.5 compatible versions
+        # The Feast config may have Spark 4.0 JARs which are incompatible
+        spark_35_jars = (
+            "org.apache.iceberg:iceberg-spark-runtime-3.5_2.12:1.5.2,"
+            "org.apache.hadoop:hadoop-aws:3.3.4,"
+            "com.amazonaws:aws-java-sdk-bundle:1.12.262"
+        )
+
         builder = SparkSession.builder.appName("kronodroid-training")
         for key, value in spark_conf.items():
-            if isinstance(value, str) and "${" in value:
+            # Override spark.jars.packages with PySpark 3.5 compatible versions
+            if key == "spark.jars.packages":
+                logger.info(f"Overriding {key} with PySpark 3.5 compatible JARs")
+                value = spark_35_jars
+            elif isinstance(value, str) and "${" in value:
                 for match in re.finditer(r'\$\{(\w+)\}', value):
                     env_var = match.group(1)
                     env_val = os.environ.get(env_var, "")
@@ -818,8 +830,7 @@ def train_kronodroid_autoencoder_op(
 
 
 @dsl.component(
-    base_image="python:3.11-slim",
-    packages_to_install=["requests"],
+    base_image="dfp-lakefs-component:v2",
 )
 def lakefs_tag_model_data_op(
     lakefs_endpoint: str,

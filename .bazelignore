@@ -1,0 +1,25 @@
+# Ignore Python/ML directories (not built with Bazel)
+notebooks
+engines
+feature_stores
+pipelines
+tools
+infra
+
+# Virtual environments
+.venv
+venv
+__pycache__
+
+# IDE and editor files
+.idea
+.vscode
+*.iml
+
+# Git
+.git
+
+# Other
+node_modules
+dist
+build

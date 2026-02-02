@@ -16,7 +16,7 @@ malware_sample = Entity(
 
 malware_family = Entity(
     name="malware_family",
-    join_keys=["family_id"],
+    join_keys=["mal_family"],
     value_type=ValueType.STRING,
     description="Android malware family identifier",
 )

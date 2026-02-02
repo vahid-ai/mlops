@@ -1,1 +1,20 @@
+# uv configuration for multi-environment Python management
+# See: https://docs.astral.sh/uv/configuration/
+
+# Cache directory (local to project)
 cache-dir = ".uv-cache"
+
+# Default Python version - 3.12 is the "blessed" version
+# This is also specified in .python-version for tools that read that file
+python-preference = "only-managed"
+
+[pip]
+# Use system certificates for corporate environments
+# Uncomment if needed:
+# cert = "/path/to/ca-bundle.crt"
+
+# Index configuration
+index-url = "https://pypi.org/simple"
+
+# Extra index for PyTorch (if needed for specific builds)
+# extra-index-url = ["https://download.pytorch.org/whl/cpu"]

@@ -1,1 +1,84 @@
-# Placeholder Bazel build for runtime comparison Android app.
+"""DFP Runtime Comparison Android Application.
+
+This app compares inference performance across different runtimes:
+- ExecuTorch (CPU, XNNPack)
+- ExecuTorch (GPU delegates)
+- ONNX Runtime (if applicable)
+"""
+
+load("@rules_kotlin//kotlin:android.bzl", "kt_android_library")
+
+package(default_visibility = ["//visibility:public"])
+
+# =============================================================================
+# Runtime Comparison Application Binary
+# =============================================================================
+
+android_binary(
+    name = "runtime_comparison_app",
+    custom_package = "com.dfp.runtimeapp",
+    manifest = "src/main/AndroidManifest.xml",
+    multidex = "native",
+    deps = [
+        ":runtime_comparison_lib",
+    ],
+)
+
+# =============================================================================
+# Runtime Comparison Library
+# =============================================================================
+
+kt_android_library(
+    name = "runtime_comparison_lib",
+    srcs = glob(["src/main/java/**/*.kt"]),
+    custom_package = "com.dfp.runtimeapp",
+    manifest = "src/main/AndroidManifest.xml",
+    resource_files = glob(["src/main/res/**"]),
+    deps = [
+        "@maven//:androidx_appcompat_appcompat",
+        "@maven//:androidx_core_core_ktx",
+        "@maven//:androidx_activity_activity_ktx",
+        "@maven//:androidx_lifecycle_lifecycle_runtime_ktx",
+        "@maven//:androidx_lifecycle_lifecycle_viewmodel_ktx",
+        "@maven//:com_google_android_material_material",
+        "@maven//:org_jetbrains_kotlinx_kotlinx_coroutines_android",
+        "@maven//:org_jetbrains_kotlinx_kotlinx_coroutines_core",
+        # ExecuTorch for model inference
+        "@maven//:org_pytorch_executorch",
+    ],
+)
+
+# =============================================================================
+# Debug Build
+# =============================================================================
+
+android_binary(
+    name = "runtime_comparison_app_debug",
+    custom_package = "com.dfp.runtimeapp",
+    debug_key = "//apps/android:debug_keystore",
+    manifest = "src/main/AndroidManifest.xml",
+    multidex = "native",
+    deps = [
+        ":runtime_comparison_lib",
+    ],
+)
+
+# =============================================================================
+# Benchmark Tests
+# =============================================================================
+
+# Performance benchmark for comparing inference runtimes
+android_local_test(
+    name = "runtime_benchmark_test",
+    srcs = glob(["src/test/java/**/*.kt"]),
+    custom_package = "com.dfp.runtimeapp",
+    manifest = "src/test/AndroidManifest.xml" if glob(["src/test/AndroidManifest.xml"]) else "src/main/AndroidManifest.xml",
+    deps = [
+        ":runtime_comparison_lib",
+        "@maven//:androidx_test_core",
+        "@maven//:androidx_test_ext_junit",
+        "@maven//:com_google_truth_truth",
+        "@maven//:junit_junit",
+        "@maven//:org_robolectric_robolectric",
+    ],
+) if glob(["src/test/java/**/*.kt"]) else None

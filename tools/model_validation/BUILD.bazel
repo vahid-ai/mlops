@@ -1,0 +1,11 @@
+"""Build targets for model validation tools."""
+
+package(default_visibility = ["//visibility:public"])
+
+# Python validation scripts are run via uv, not built with Bazel.
+# This BUILD file is a placeholder for potential future Bazel Python rules.
+
+exports_files([
+    "validate_model.py",
+    "compare_results.py",
+])

@@ -408,10 +408,10 @@ def run_kubeflow_transformations(
     minio_secret_name: str = "minio-credentials",
     lakefs_secret_name: str = "lakefs-credentials",
     driver_cores: int = 1,
-    driver_memory: str = "4g",
+    driver_memory: str = "512m",
     executor_cores: int = 2,
-    executor_instances: int = 2,
-    executor_memory: str = "6g",
+    executor_instances: int = 1,
+    executor_memory: str = "512m",
     timeout_seconds: int = 3600,
     use_kfp_client: bool = False,
     kfp_host: str | None = None,
@@ -699,11 +699,9 @@ def _run_kubeflow_via_sparkapplication(
     # Build SparkApplication manifest
     # Use Hadoop-based Iceberg catalog since LakeFS OSS doesn't include REST catalog
     catalog_name = "lakefs"
-    # IMPORTANT: Use the per-run branch for the warehouse path, not the target branch.
-    # Iceberg's Hadoop catalog derives table paths from the warehouse, and if the Spark job
-    # writes to a different branch than what's in the warehouse path, Iceberg will raise:
-    #   "Cannot set a custom location for a path-based table"
-    warehouse_path = f"s3a://{lakefs_repository}/{per_run_branch}/iceberg"
+    # Use target branch for warehouse path - after Spark job completes, changes are merged
+    # back into the target branch (e.g., dev), so data should be accessible via target branch path
+    warehouse_path = f"s3a://{lakefs_repository}/{lakefs_branch}/iceberg"
 
     minio_access_key = os.getenv("MINIO_ACCESS_KEY_ID", "")
     minio_secret_key = os.getenv("MINIO_SECRET_ACCESS_KEY", "")
@@ -1153,8 +1151,17 @@ def _commit_and_merge_lakefs(
     return True
 
 
-def run_feast_apply() -> bool:
+def run_feast_apply(
+    lakefs_endpoint: str | None = None,
+    redis_connection: str | None = None,
+    skip_source_validation: bool = False,
+) -> bool:
     """Apply Feast feature definitions.
+
+    Args:
+        lakefs_endpoint: LakeFS endpoint URL (default: http://localhost:8000)
+        redis_connection: Redis connection string (default: redis://localhost:6379)
+        skip_source_validation: Skip validation of data sources (useful if tables don't exist yet)
 
     Returns:
         True if successful
@@ -1165,13 +1172,37 @@ def run_feast_apply() -> bool:
 
     feast_dir = PROJECT_ROOT / "feature_stores" / "feast_store"
 
+    # Set up environment for Feast
+    # Use localhost endpoints for local Feast CLI (port-forwarded from k8s)
+    feast_env = os.environ.copy()
+    feast_env["LAKEFS_ENDPOINT_URL"] = lakefs_endpoint or os.getenv(
+        "LAKEFS_ENDPOINT_URL", "http://localhost:8000"
+    )
+    feast_env["REDIS_CONNECTION_STRING"] = redis_connection or os.getenv(
+        "REDIS_CONNECTION_STRING", "redis://localhost:6379"
+    )
+
+    # Ensure LakeFS credentials are set
+    if not feast_env.get("LAKEFS_ACCESS_KEY_ID") or not feast_env.get("LAKEFS_SECRET_ACCESS_KEY"):
+        print("WARNING: LAKEFS_ACCESS_KEY_ID/LAKEFS_SECRET_ACCESS_KEY not set")
+        print("  Feast may not be able to access LakeFS Iceberg tables")
+
+    print(f"  LakeFS endpoint: {feast_env['LAKEFS_ENDPOINT_URL']}")
+    print(f"  Redis connection: {feast_env['REDIS_CONNECTION_STRING']}")
+
     try:
+        cmd = ["feast", "apply"]
+        if skip_source_validation:
+            cmd.append("--skip-source-validation")
+            print("  Skipping source validation")
+
         result = subprocess.run(
-            ["feast", "apply"],
+            cmd,
             cwd=str(feast_dir),
             check=True,
             capture_output=True,
             text=True,
+            env=feast_env,
         )
         print(result.stdout)
         print("Feast feature definitions applied successfully")
@@ -1189,11 +1220,17 @@ def run_feast_apply() -> bool:
         return False
 
 
-def run_feast_materialize(days_back: int = 30) -> bool:
+def run_feast_materialize(
+    days_back: int = 30,
+    lakefs_endpoint: str | None = None,
+    redis_connection: str | None = None,
+) -> bool:
     """Materialize features to online store.
 
     Args:
         days_back: Number of days of features to materialize
+        lakefs_endpoint: LakeFS endpoint URL (default: http://localhost:8000)
+        redis_connection: Redis connection string (default: redis://localhost:6379)
 
     Returns:
         True if successful
@@ -1205,6 +1242,19 @@ def run_feast_materialize(days_back: int = 30) -> bool:
     feast_dir = PROJECT_ROOT / "feature_stores" / "feast_store"
     end_date = datetime.now()
     start_date = end_date - timedelta(days=days_back)
+
+    # Set up environment for Feast
+    feast_env = os.environ.copy()
+    feast_env["LAKEFS_ENDPOINT_URL"] = lakefs_endpoint or os.getenv(
+        "LAKEFS_ENDPOINT_URL", "http://localhost:8000"
+    )
+    feast_env["REDIS_CONNECTION_STRING"] = redis_connection or os.getenv(
+        "REDIS_CONNECTION_STRING", "redis://localhost:6379"
+    )
+
+    print(f"  LakeFS endpoint: {feast_env['LAKEFS_ENDPOINT_URL']}")
+    print(f"  Redis connection: {feast_env['REDIS_CONNECTION_STRING']}")
+    print(f"  Date range: {start_date.isoformat()} to {end_date.isoformat()}")
 
     try:
         result = subprocess.run(
@@ -1218,6 +1268,7 @@ def run_feast_materialize(days_back: int = 30) -> bool:
             check=True,
             capture_output=True,
             text=True,
+            env=feast_env,
         )
         print(result.stdout)
         print("Feature materialization completed successfully")
@@ -1268,6 +1319,104 @@ def commit_to_lakefs(branch: str, message: str) -> bool:
 
     except Exception as e:
         print(f"WARNING: LakeFS commit failed: {e}")
+        return False
+
+
+def run_autoencoder_training(
+    lakefs_branch: str = "dev",
+    kfp_host: str | None = None,
+    max_epochs: int = 10,
+    batch_size: int = 512,
+    learning_rate: float = 0.001,
+    latent_dim: int = 16,
+    timeout_seconds: int = 3600,
+) -> bool:
+    """Train the Kronodroid autoencoder via Kubeflow Pipeline.
+
+    Assumes data has already been ingested and transformed into Iceberg tables.
+
+    Args:
+        lakefs_branch: LakeFS branch/ref containing the training data
+        kfp_host: Kubeflow Pipelines host URL
+        max_epochs: Maximum training epochs
+        batch_size: Training batch size
+        learning_rate: Optimizer learning rate
+        latent_dim: Autoencoder latent space dimension
+        timeout_seconds: Maximum time to wait for training completion
+
+    Returns:
+        True if training succeeded
+    """
+    print("\n" + "=" * 60)
+    print("Training Kronodroid Autoencoder")
+    print("=" * 60)
+    print(f"  LakeFS branch: {lakefs_branch}")
+    print(f"  Max epochs: {max_epochs}")
+    print(f"  Batch size: {batch_size}")
+    print(f"  Learning rate: {learning_rate}")
+    print(f"  Latent dim: {latent_dim}")
+    print(f"  Timeout: {timeout_seconds}s")
+
+    try:
+        import kfp
+
+        from orchestration.kubeflow.dfp_kfp.pipelines.kronodroid_autoencoder_training_pipeline import (
+            kronodroid_autoencoder_training_pipeline,
+        )
+
+        # Determine KFP host
+        if kfp_host is None:
+            kfp_host = os.getenv("KFP_HOST", "http://localhost:8080")
+        print(f"  KFP host: {kfp_host}")
+
+        # Construct cluster-internal endpoints
+        lakefs_endpoint = "http://lakefs.dfp:8000"
+        minio_endpoint = "http://minio.dfp:9000"
+        mlflow_tracking_uri = "http://mlflow.dfp:5000"
+
+        client = kfp.Client(host=kfp_host)
+
+        # Create or get experiment
+        experiment_name = "kronodroid-autoencoder"
+        try:
+            experiment = client.get_experiment(experiment_name=experiment_name)
+        except Exception:
+            experiment = client.create_experiment(name=experiment_name)
+        print(f"Experiment details: {kfp_host}/#/experiments/details/{experiment.experiment_id}")
+
+        # Submit run
+        run = client.create_run_from_pipeline_func(
+            kronodroid_autoencoder_training_pipeline,
+            experiment_name=experiment_name,
+            arguments={
+                "lakefs_ref": lakefs_branch,
+                "lakefs_endpoint": lakefs_endpoint,
+                "minio_endpoint": minio_endpoint,
+                "mlflow_tracking_uri": mlflow_tracking_uri,
+                "max_epochs": max_epochs,
+                "batch_size": batch_size,
+                "learning_rate": learning_rate,
+                "latent_dim": latent_dim,
+            },
+        )
+
+        print(f"Run details: {kfp_host}/#/runs/details/{run.run_id}")
+        print(f"  Submitted KFP run: {run.run_id}")
+
+        # Wait for completion
+        result = client.wait_for_run_completion(run.run_id, timeout=timeout_seconds)
+
+        if result.state == "SUCCEEDED":
+            print("Autoencoder training completed successfully")
+            return True
+        else:
+            print(f"ERROR: Training run failed with status: {result.state}")
+            return False
+
+    except Exception as e:
+        print(f"ERROR: Autoencoder training failed: {e}")
+        import traceback
+        traceback.print_exc()
         return False
 
 
@@ -1351,6 +1500,11 @@ def main():
         help="Skip Feast apply step",
     )
     parser.add_argument(
+        "--skip-source-validation",
+        action="store_true",
+        help="Skip Feast source validation (use if Iceberg tables aren't accessible locally)",
+    )
+    parser.add_argument(
         "--materialize-only",
         action="store_true",
         help="Only run feast materialize",
@@ -1364,19 +1518,19 @@ def main():
     # Spark resource options for testing
     parser.add_argument(
         "--driver-memory",
-        default="4g",
-        help="Spark driver memory (default: 4g)",
+        default="512m",
+        help="Spark driver memory (default: 512m)",
     )
     parser.add_argument(
         "--executor-memory",
-        default="6g",
-        help="Spark executor memory (default: 6g)",
+        default="512m",
+        help="Spark executor memory (default: 512m)",
     )
     parser.add_argument(
         "--executor-instances",
         type=int,
-        default=2,
-        help="Number of Spark executors (default: 2)",
+        default=1,
+        help="Number of Spark executors (default: 1)",
     )
     parser.add_argument(
         "--test-mode",
@@ -1388,6 +1542,42 @@ def main():
         type=int,
         default=0,
         help="Limit rows per source table for testing (0 = no limit, e.g., 1000 for quick tests)",
+    )
+    # Autoencoder training options
+    parser.add_argument(
+        "--train-autoencoder",
+        action="store_true",
+        help="Train the autoencoder model (assumes data already ingested and transformed)",
+    )
+    parser.add_argument(
+        "--max-epochs",
+        type=int,
+        default=10,
+        help="Maximum training epochs for autoencoder (default: 10)",
+    )
+    parser.add_argument(
+        "--batch-size",
+        type=int,
+        default=512,
+        help="Training batch size for autoencoder (default: 512)",
+    )
+    parser.add_argument(
+        "--learning-rate",
+        type=float,
+        default=0.001,
+        help="Learning rate for autoencoder training (default: 0.001)",
+    )
+    parser.add_argument(
+        "--latent-dim",
+        type=int,
+        default=16,
+        help="Autoencoder latent dimension (default: 16)",
+    )
+    parser.add_argument(
+        "--training-timeout",
+        type=int,
+        default=3600,
+        help="Timeout in seconds for training job (default: 3600)",
     )
 
     args = parser.parse_args()
@@ -1426,6 +1616,17 @@ def main():
 
     if args.materialize_only:
         success = run_feast_materialize(args.materialize_days)
+    elif args.train_autoencoder:
+        # Train autoencoder only (assumes data already ingested and transformed)
+        success = run_autoencoder_training(
+            lakefs_branch=args.branch,
+            kfp_host=args.kfp_host,
+            max_epochs=args.max_epochs,
+            batch_size=args.batch_size,
+            learning_rate=args.learning_rate,
+            latent_dim=args.latent_dim,
+            timeout_seconds=args.training_timeout,
+        )
     else:
         # Step 1: dlt ingestion
         if not args.skip_ingestion:
@@ -1482,7 +1683,7 @@ def main():
 
         # Step 3: Feast apply
         if not args.skip_feast:
-            if not run_feast_apply():
+            if not run_feast_apply(skip_source_validation=args.skip_source_validation):
                 success = False
                 print("\nPipeline failed at Feast apply step")
                 sys.exit(1)

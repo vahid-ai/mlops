@@ -12,6 +12,13 @@ See inline README stubs and doc files under `docs/` for guidance on how each pac
 - Feature store: configure `feature_stores/feast_store/feature_store.yaml` registry path and Spark catalog settings to align with LakeFS/Iceberg.
 
 ## Build and run
+Both pipelines can be run with:                                                                                                                                                               
+  # Iceberg transformation                                                                                                                                                                      
+  uv run tools/scripts/run_kronodroid_pipeline.py --branch dev --transform-engine kubeflow --destination lakefs --use-kfp-client                                                                
+                                                                                                                                                                                                
+  # Autoencoder training                                                                                                                                                                        
+  uv run tools/scripts/run_kronodroid_pipeline.py --train-autoencoder --branch dev --max-epochs 20 --kfp-host http://localhost:8080  
+
 - Feature jobs (Spark/DataFusion): run engine scripts such as `python engines/spark_engine/dfp_spark/feature_jobs.py` once Spark/Iceberg configs are set.
 - Training: `python -m core.dfp_core.ml.training_pytorch` (placeholder loop) uses configs from `core/conf`; add MLflow/LakeFS logging via `core/dfp_core/feast_mlflow_utils.py`.
 - Export: `python -m core.dfp_core.ml.export_executorch` (or `export_tflite.py`, `export_onnx.py`) to emit mobile-friendly artifacts.

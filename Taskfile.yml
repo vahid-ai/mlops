@@ -15,6 +15,205 @@ tasks:
     cmds:
       - mise install
 
+  # ─────────────────────────────────────────────────────────────────────────────
+  # Python Environment Management (uv)
+  # ─────────────────────────────────────────────────────────────────────────────
+
+  uv:sync:
+    desc: Sync default Python environment (Python 3.12)
+    cmds:
+      - |
+        echo "Syncing Python 3.12 environment..."
+        uv sync --python 3.12
+        echo ""
+        echo "Environment ready. Run 'source .venv/bin/activate' or use 'uv run <command>'"
+
+  uv:sync:dev:
+    desc: Sync environment with dev dependencies (linting, testing)
+    cmds:
+      - |
+        echo "Syncing Python 3.12 environment with dev dependencies..."
+        uv sync --python 3.12 --group dev
+        echo ""
+        echo "Dev environment ready with pyrefly, torchfix, pytest"
+
+  uv:sync:android:
+    desc: Sync environment for ExecuTorch/Android development
+    cmds:
+      - |
+        echo "Syncing Python 3.12 environment with ExecuTorch..."
+        uv sync --python 3.12 --group android
+        echo ""
+        echo "Android/ExecuTorch environment ready"
+
+  uv:sync:kubeflow:
+    desc: Sync environment for Kubeflow pipeline development
+    cmds:
+      - |
+        echo "Syncing Python 3.12 environment with Kubeflow dependencies..."
+        uv sync --python 3.12 --group kubeflow
+        echo ""
+        echo "Kubeflow environment ready"
+
+  uv:sync:all:
+    desc: Sync environment with all dependency groups
+    cmds:
+      - |
+        echo "Syncing Python 3.12 environment with all dependency groups..."
+        uv sync --python 3.12 --all-groups
+        echo ""
+        echo "Full environment ready with all dependencies"
+
+  uv:info:
+    desc: Show Python environment information
+    cmds:
+      - |
+        echo "=== Python Environment Info ==="
+        echo ""
+        echo "uv version:"
+        uv --version
+        echo ""
+        echo "Project Python constraint:"
+        grep "requires-python" pyproject.toml || echo "Not specified"
+        echo ""
+        echo ".python-version file:"
+        cat .python-version 2>/dev/null || echo "Not found"
+        echo ""
+        echo "Current virtual environment:"
+        if [ -d ".venv" ]; then
+          .venv/bin/python --version
+          PKGCOUNT=$(uv pip list 2>/dev/null | wc -l | tr -d ' ')
+          echo "Packages: $((PKGCOUNT - 2)) installed"
+        else
+          echo "No .venv found - run 'task uv:sync' to create"
+        fi
+        echo ""
+        echo "Key package versions:"
+        uv run python -c "import torch; print(f'  PyTorch: {torch.__version__}')" 2>/dev/null || echo "  PyTorch: not installed"
+        uv run python -c "import pandas; print(f'  Pandas: {pandas.__version__}')" 2>/dev/null || echo "  Pandas: not installed"
+        uv run python -c "from executorch.exir import to_edge; print('  ExecuTorch: installed')" 2>/dev/null || echo "  ExecuTorch: not installed (run task uv:sync:android)"
+
+  uv:lock:
+    desc: Update uv.lock file for reproducible installs
+    cmds:
+      - |
+        echo "Updating uv.lock..."
+        uv lock
+        echo "Lock file updated. Commit uv.lock for reproducible builds."
+
+  uv:clean:
+    desc: Remove virtual environment and cache
+    cmds:
+      - |
+        echo "Removing .venv..."
+        rm -rf .venv
+        echo "Removing .uv-cache..."
+        rm -rf .uv-cache
+        echo "Clean complete. Run 'task uv:sync' to recreate."
+
+  bazel:install:
+    desc: Install Bazel via Bazelisk (cross-platform version manager)
+    vars:
+      BAZELISK_VERSION: '{{.BAZELISK_VERSION | default "v1.25.0"}}'
+      INSTALL_DIR: '{{.INSTALL_DIR | default "/usr/local/bin"}}'
+    cmds:
+      - |
+        set -e
+
+        # Detect OS
+        OS="$(uname -s | tr '[:upper:]' '[:lower:]')"
+        case "$OS" in
+          darwin) OS="darwin" ;;
+          linux) OS="linux" ;;
+          mingw*|msys*|cygwin*) OS="windows" ;;
+          *)
+            echo "Unsupported OS: $OS"
+            exit 1
+            ;;
+        esac
+
+        # Detect architecture
+        ARCH="$(uname -m)"
+        case "$ARCH" in
+          x86_64|amd64) ARCH="amd64" ;;
+          aarch64|arm64) ARCH="arm64" ;;
+          *)
+            echo "Unsupported architecture: $ARCH"
+            exit 1
+            ;;
+        esac
+
+        echo "Detected platform: ${OS}-${ARCH}"
+        echo "Installing Bazelisk {{.BAZELISK_VERSION}}..."
+
+        # Set binary name and extension
+        if [ "$OS" = "windows" ]; then
+          BINARY_NAME="bazelisk-${OS}-${ARCH}.exe"
+          TARGET_NAME="bazel.exe"
+        else
+          BINARY_NAME="bazelisk-${OS}-${ARCH}"
+          TARGET_NAME="bazel"
+        fi
+
+        # Download URL
+        URL="https://github.com/bazelbuild/bazelisk/releases/download/{{.BAZELISK_VERSION}}/${BINARY_NAME}"
+
+        echo "Downloading from: $URL"
+
+        # Create temp directory
+        TEMP_DIR=$(mktemp -d)
+        trap "rm -rf $TEMP_DIR" EXIT
+
+        # Download Bazelisk
+        if command -v curl >/dev/null 2>&1; then
+          curl -fsSL -o "${TEMP_DIR}/${TARGET_NAME}" "$URL"
+        elif command -v wget >/dev/null 2>&1; then
+          wget -q -O "${TEMP_DIR}/${TARGET_NAME}" "$URL"
+        else
+          echo "Error: curl or wget required"
+          exit 1
+        fi
+
+        # Make executable (not needed on Windows)
+        if [ "$OS" != "windows" ]; then
+          chmod +x "${TEMP_DIR}/${TARGET_NAME}"
+        fi
+
+        # Install to target directory
+        INSTALL_PATH="{{.INSTALL_DIR}}/${TARGET_NAME}"
+
+        echo "Installing to: $INSTALL_PATH"
+
+        # Check if we need sudo
+        if [ -w "{{.INSTALL_DIR}}" ]; then
+          mv "${TEMP_DIR}/${TARGET_NAME}" "$INSTALL_PATH"
+        else
+          echo "Requires sudo to install to {{.INSTALL_DIR}}"
+          sudo mv "${TEMP_DIR}/${TARGET_NAME}" "$INSTALL_PATH"
+        fi
+
+        # Verify installation
+        echo ""
+        echo "Bazelisk installed successfully!"
+        echo ""
+        "$INSTALL_PATH" --version
+        echo ""
+        echo "Bazelisk will automatically download the correct Bazel version"
+        echo "when you run 'bazel' based on .bazelversion file (if present)"
+
+  bazel:version:
+    desc: Show installed Bazel/Bazelisk version
+    cmds:
+      - |
+        if command -v bazel >/dev/null 2>&1; then
+          echo "Bazelisk version:"
+          bazel --version
+          echo ""
+          echo "To see actual Bazel version, run: bazel version"
+        else
+          echo "Bazel/Bazelisk not found. Run: task bazel:install"
+        fi
+
   up:
     desc: Create kind cluster and deploy local services
     cmds:
@@ -431,3 +630,480 @@ tasks:
         POD_NAME=${POD#pod/}
         echo "Tailing logs for $POD_NAME..."
         kubectl logs -n "{{.NAMESPACE}}" "$POD" -f --tail=200
+
+  # ===========================================================================
+  # Model Validation Tasks
+  # ===========================================================================
+
+  model:validate:
+    desc: Run full model validation (PyTorch → ExecuTorch → Android → Compare)
+    vars:
+      MODEL_NAME: '{{.MODEL_NAME | default "kronodroid_autoencoder"}}'
+      MODEL_VERSION: '{{.MODEL_VERSION | default "latest"}}'
+      TEST_DATA: '{{.TEST_DATA | default "./data/test_samples.npy"}}'
+      TOLERANCE: '{{.TOLERANCE | default "0.01"}}'
+      MLFLOW_URI: '{{.MLFLOW_URI | default "http://localhost:5000"}}'
+    env:
+      # MinIO/S3 credentials for MLflow artifact access
+      AWS_ACCESS_KEY_ID: minioadmin
+      AWS_SECRET_ACCESS_KEY: minioadmin
+      MLFLOW_S3_ENDPOINT_URL: http://localhost:9000
+    cmds:
+      - |
+        uv run python tools/model_validation/validate_model.py \
+          --model-name "{{.MODEL_NAME}}" \
+          --model-version "{{.MODEL_VERSION}}" \
+          --test-data "{{.TEST_DATA}}" \
+          --tolerance "{{.TOLERANCE}}" \
+          --mlflow-uri "{{.MLFLOW_URI}}"
+
+  model:validate:no-android:
+    desc: Run model validation without Android emulator (host-only comparison)
+    vars:
+      MODEL_NAME: '{{.MODEL_NAME | default "kronodroid_autoencoder"}}'
+      MODEL_VERSION: '{{.MODEL_VERSION | default "latest"}}'
+      TEST_DATA: '{{.TEST_DATA | default "./data/test_samples.npy"}}'
+      TOLERANCE: '{{.TOLERANCE | default "0.01"}}'
+    env:
+      # MinIO/S3 credentials for MLflow artifact access
+      AWS_ACCESS_KEY_ID: minioadmin
+      AWS_SECRET_ACCESS_KEY: minioadmin
+      MLFLOW_S3_ENDPOINT_URL: http://localhost:9000
+    cmds:
+      - |
+        uv run python tools/model_validation/validate_model.py \
+          --model-name "{{.MODEL_NAME}}" \
+          --model-version "{{.MODEL_VERSION}}" \
+          --test-data "{{.TEST_DATA}}" \
+          --tolerance "{{.TOLERANCE}}" \
+          --skip-android
+
+  model:export:
+    desc: Export PyTorch model from MLflow to ExecuTorch format
+    vars:
+      MODEL_NAME: '{{.MODEL_NAME}}'
+      MODEL_VERSION: '{{.MODEL_VERSION | default "latest"}}'
+      OUTPUT: '{{.OUTPUT | default "./models/model.pte"}}'
+      BACKEND: '{{.BACKEND | default "xnnpack"}}'
+      QUANTIZATION: '{{.QUANTIZATION | default "none"}}'
+    env:
+      # MinIO/S3 credentials for MLflow artifact access
+      AWS_ACCESS_KEY_ID: minioadmin
+      AWS_SECRET_ACCESS_KEY: minioadmin
+      MLFLOW_S3_ENDPOINT_URL: http://localhost:9000
+    cmds:
+      - |
+        if [ -z "{{.MODEL_NAME}}" ]; then
+          echo "Error: MODEL_NAME is required"
+          echo "Usage: task model:export MODEL_NAME=my_model"
+          exit 1
+        fi
+        uv run python -m runtimes.executorch.export.cli export \
+          --model-name "{{.MODEL_NAME}}" \
+          --model-version "{{.MODEL_VERSION}}" \
+          --output "{{.OUTPUT}}" \
+          --backend "{{.BACKEND}}" \
+          --quantization "{{.QUANTIZATION}}" \
+          --register
+
+  model:export:list-quantization:
+    desc: List available quantization configurations
+    cmds:
+      - uv run python -m runtimes.executorch.export.cli list-quantization
+
+  model:export:test:
+    desc: Test ExecuTorch export pipeline with a simple model (no MLflow required)
+    cmds:
+      - uv run tools/model_validation/test_export.py
+
+  model:compare:
+    desc: Compare inference results from different runtimes
+    vars:
+      PYTORCH_RESULTS: '{{.PYTORCH_RESULTS}}'
+      EXECUTORCH_RESULTS: '{{.EXECUTORCH_RESULTS | default ""}}'
+      ANDROID_RESULTS: '{{.ANDROID_RESULTS | default ""}}'
+      TOLERANCE: '{{.TOLERANCE | default "0.01"}}'
+    cmds:
+      - |
+        ARGS="--pytorch-results {{.PYTORCH_RESULTS}} --tolerance {{.TOLERANCE}}"
+        if [ -n "{{.EXECUTORCH_RESULTS}}" ]; then
+          ARGS="$ARGS --executorch-results {{.EXECUTORCH_RESULTS}}"
+        fi
+        if [ -n "{{.ANDROID_RESULTS}}" ]; then
+          ARGS="$ARGS --android-results {{.ANDROID_RESULTS}}"
+        fi
+        uv run python tools/model_validation/compare_results.py $ARGS
+
+  # ===========================================================================
+  # Android Build Tasks
+  # ===========================================================================
+
+  android:build:
+    desc: Build Android apps with Bazel
+    vars:
+      CONFIG: '{{.CONFIG | default "android_debug"}}'
+    cmds:
+      - bazel build --config={{.CONFIG}} //apps/android/...
+
+  android:build:main:
+    desc: Build main Android app
+    vars:
+      CONFIG: '{{.CONFIG | default "android_debug"}}'
+    cmds:
+      - bazel build --config={{.CONFIG}} //apps/android/main_app:main_app
+
+  android:build:runtime:
+    desc: Build runtime comparison app
+    vars:
+      CONFIG: '{{.CONFIG | default "android_debug"}}'
+    cmds:
+      - bazel build --config={{.CONFIG}} //apps/android/runtime_comparison_app:runtime_comparison_app
+
+  android:install:
+    desc: Build and install Android app on connected device/emulator
+    vars:
+      APP: '{{.APP | default "main_app"}}'
+    cmds:
+      - bazel mobile-install //apps/android/{{.APP}}:{{.APP}}
+
+  android:test:
+    desc: Run Android unit tests (Robolectric)
+    cmds:
+      - bazel test --config=robolectric //apps/android/...
+
+  android:test:device:
+    desc: Run Android instrumentation tests on device/emulator
+    cmds:
+      - |
+        echo "Building and installing test APK..."
+        bazel build --config=android_debug //apps/android/runtime_comparison_app:runtime_comparison_app
+
+        APK="bazel-bin/apps/android/runtime_comparison_app/runtime_comparison_app.apk"
+        if [ ! -f "$APK" ]; then
+          echo "Error: APK not found at $APK"
+          exit 1
+        fi
+
+        echo "Installing APK..."
+        adb install -r "$APK"
+
+        echo "Running instrumentation test..."
+        adb shell am instrument -w \
+          -e class com.dfp.runtimeapp.ModelAccuracyTest \
+          com.dfp.runtimeapp.test/androidx.test.runner.AndroidJUnitRunner
+
+  android:emulator:start:
+    desc: Start Android emulator
+    vars:
+      AVD: '{{.AVD | default "Pixel_6_API_34"}}'
+    cmds:
+      - |
+        if adb devices | grep -q "emulator"; then
+          echo "Emulator already running"
+        else
+          echo "Starting emulator: {{.AVD}}"
+          emulator -avd "{{.AVD}}" -no-snapshot-load &
+          echo "Waiting for emulator to boot..."
+          adb wait-for-device
+          adb shell 'while [[ -z $(getprop sys.boot_completed) ]]; do sleep 1; done'
+          echo "Emulator ready!"
+        fi
+
+  android:emulator:stop:
+    desc: Stop Android emulator
+    cmds:
+      - adb -s emulator-5554 emu kill || true
+
+  android:results:pull:
+    desc: Pull benchmark results from Android device
+    vars:
+      OUTPUT_DIR: '{{.OUTPUT_DIR | default "./results"}}'
+    cmds:
+      - |
+        mkdir -p "{{.OUTPUT_DIR}}"
+        echo "Pulling benchmark results..."
+        adb pull /sdcard/Android/data/com.dfp.runtimeapp/files/ "{{.OUTPUT_DIR}}/" || {
+          echo "Could not pull results. Make sure the app has run and generated results."
+          exit 1
+        }
+        echo "Results saved to {{.OUTPUT_DIR}}/"
+        ls -la "{{.OUTPUT_DIR}}/"
+
+  # ===========================================================================
+  # Secrets Management Tasks
+  # ===========================================================================
+
+  secrets:sync:
+    desc: Sync secrets from dfp namespace to kubeflow namespace (and vice versa)
+    vars:
+      DFP_NAMESPACE: '{{.NAMESPACE | default "dfp"}}'
+      KFP_NAMESPACE: '{{.KFP_NAMESPACE | default "kubeflow"}}'
+    cmds:
+      - |
+        set -e
+        echo "=== Syncing secrets between namespaces ==="
+        echo ""
+
+        # Load credentials from .env file
+        if [ -f .env ]; then
+          source .env
+        fi
+
+        # MinIO credentials (hardcoded in manifests)
+        MINIO_ACCESS_KEY="${MINIO_ACCESS_KEY_ID:-minioadmin}"
+        MINIO_SECRET_KEY="${MINIO_SECRET_ACCESS_KEY:-minioadmin}"
+
+        # LakeFS credentials (from .env or environment)
+        LAKEFS_ACCESS_KEY="${LAKEFS_ACCESS_KEY_ID:-}"
+        LAKEFS_SECRET_KEY="${LAKEFS_SECRET_ACCESS_KEY:-}"
+
+        if [ -z "$LAKEFS_ACCESS_KEY" ] || [ -z "$LAKEFS_SECRET_KEY" ]; then
+          echo "ERROR: LAKEFS_ACCESS_KEY_ID and LAKEFS_SECRET_ACCESS_KEY must be set"
+          echo "Run 'task lakefs:keys' to generate new credentials"
+          exit 1
+        fi
+
+        echo "Creating/updating secrets in {{.DFP_NAMESPACE}} namespace..."
+
+        # Create minio-credentials in dfp namespace
+        kubectl create secret generic minio-credentials \
+          --namespace="{{.DFP_NAMESPACE}}" \
+          --from-literal=MINIO_ACCESS_KEY_ID="$MINIO_ACCESS_KEY" \
+          --from-literal=MINIO_SECRET_ACCESS_KEY="$MINIO_SECRET_KEY" \
+          --from-literal=AWS_ACCESS_KEY_ID="$MINIO_ACCESS_KEY" \
+          --from-literal=AWS_SECRET_ACCESS_KEY="$MINIO_SECRET_KEY" \
+          --dry-run=client -o yaml | kubectl apply -f -
+
+        # Create lakefs-credentials in dfp namespace
+        kubectl create secret generic lakefs-credentials \
+          --namespace="{{.DFP_NAMESPACE}}" \
+          --from-literal=LAKEFS_ACCESS_KEY_ID="$LAKEFS_ACCESS_KEY" \
+          --from-literal=LAKEFS_SECRET_ACCESS_KEY="$LAKEFS_SECRET_KEY" \
+          --dry-run=client -o yaml | kubectl apply -f -
+
+        echo ""
+        echo "Creating/updating secrets in {{.KFP_NAMESPACE}} namespace..."
+
+        # Create minio-credentials in kubeflow namespace
+        kubectl create secret generic minio-credentials \
+          --namespace="{{.KFP_NAMESPACE}}" \
+          --from-literal=MINIO_ACCESS_KEY_ID="$MINIO_ACCESS_KEY" \
+          --from-literal=MINIO_SECRET_ACCESS_KEY="$MINIO_SECRET_KEY" \
+          --from-literal=AWS_ACCESS_KEY_ID="$MINIO_ACCESS_KEY" \
+          --from-literal=AWS_SECRET_ACCESS_KEY="$MINIO_SECRET_KEY" \
+          --dry-run=client -o yaml | kubectl apply -f -
+
+        # Create lakefs-credentials in kubeflow namespace
+        kubectl create secret generic lakefs-credentials \
+          --namespace="{{.KFP_NAMESPACE}}" \
+          --from-literal=LAKEFS_ACCESS_KEY_ID="$LAKEFS_ACCESS_KEY" \
+          --from-literal=LAKEFS_SECRET_ACCESS_KEY="$LAKEFS_SECRET_KEY" \
+          --dry-run=client -o yaml | kubectl apply -f -
+
+        echo ""
+        echo "=== Secrets synced successfully ==="
+        task secrets:verify
+
+  secrets:verify:
+    desc: Verify that required secrets exist in both dfp and kubeflow namespaces
+    vars:
+      DFP_NAMESPACE: '{{.NAMESPACE | default "dfp"}}'
+      KFP_NAMESPACE: '{{.KFP_NAMESPACE | default "kubeflow"}}'
+    cmds:
+      - |
+        echo "=== Verifying secrets ==="
+        echo ""
+
+        ERRORS=0
+
+        for NS in "{{.DFP_NAMESPACE}}" "{{.KFP_NAMESPACE}}"; do
+          echo "Namespace: $NS"
+
+          # Check minio-credentials
+          if kubectl get secret minio-credentials -n "$NS" >/dev/null 2>&1; then
+            KEYS=$(kubectl get secret minio-credentials -n "$NS" -o jsonpath='{.data}' | jq -r 'keys | join(", ")')
+            echo "  ✓ minio-credentials: $KEYS"
+          else
+            echo "  ✗ minio-credentials: NOT FOUND"
+            ERRORS=$((ERRORS + 1))
+          fi
+
+          # Check lakefs-credentials
+          if kubectl get secret lakefs-credentials -n "$NS" >/dev/null 2>&1; then
+            KEYS=$(kubectl get secret lakefs-credentials -n "$NS" -o jsonpath='{.data}' | jq -r 'keys | join(", ")')
+            echo "  ✓ lakefs-credentials: $KEYS"
+          else
+            echo "  ✗ lakefs-credentials: NOT FOUND"
+            ERRORS=$((ERRORS + 1))
+          fi
+
+          echo ""
+        done
+
+        if [ $ERRORS -gt 0 ]; then
+          echo "ERROR: $ERRORS missing secrets. Run 'task secrets:sync' to create them."
+          exit 1
+        fi
+
+        echo "All secrets verified successfully!"
+
+  secrets:show:
+    desc: Show decoded secret values (for debugging)
+    vars:
+      SECRET: '{{.SECRET | default ""}}'
+      NAMESPACE: '{{.NAMESPACE | default "dfp"}}'
+    cmds:
+      - |
+        if [ -z "{{.SECRET}}" ]; then
+          echo "Usage: task secrets:show SECRET=<secret-name> [NAMESPACE=<namespace>]"
+          echo ""
+          echo "Available secrets in {{.NAMESPACE}}:"
+          kubectl get secrets -n "{{.NAMESPACE}}" --no-headers | awk '{print "  - "$1}'
+          exit 0
+        fi
+
+        echo "Secret: {{.SECRET}} (namespace: {{.NAMESPACE}})"
+        echo ""
+        kubectl get secret "{{.SECRET}}" -n "{{.NAMESPACE}}" -o json | \
+          jq -r '.data | to_entries[] | "\(.key): \(.value | @base64d)"'
+
+  # ===========================================================================
+  # Pipeline Docker Image Tasks
+  # ===========================================================================
+
+  autoencoder-image:build:
+    desc: Build the autoencoder training Docker image
+    vars:
+      IMAGE_TAG: '{{.IMAGE_TAG | default "v6"}}'
+    cmds:
+      - docker build -t "dfp-autoencoder-train:{{.IMAGE_TAG}}" -f tools/docker/Dockerfile.autoencoder_train .
+
+  autoencoder-image:load:
+    desc: Load autoencoder training image into kind cluster
+    vars:
+      IMAGE_TAG: '{{.IMAGE_TAG | default "v6"}}'
+    cmds:
+      - kind load docker-image "dfp-autoencoder-train:{{.IMAGE_TAG}}" --name "{{.CLUSTER_NAME}}"
+
+  autoencoder-image:
+    desc: Build and load autoencoder training image into kind
+    cmds:
+      - task: autoencoder-image:build
+      - task: autoencoder-image:load
+
+  pipeline-images:
+    desc: Build and load all pipeline images (spark + autoencoder)
+    cmds:
+      - task: spark-image
+      - task: autoencoder-image
+
+  pipeline-images:verify:
+    desc: Verify pipeline images are loaded in kind cluster
+    cmds:
+      - |
+        echo "=== Checking pipeline images in kind cluster ==="
+        echo ""
+
+        IMAGES=("dfp-spark:latest" "dfp-autoencoder-train:v6")
+        ERRORS=0
+
+        for IMG in "${IMAGES[@]}"; do
+          if docker exec "{{.CLUSTER_NAME}}-control-plane" crictl images | grep -q "${IMG%:*}"; then
+            echo "  ✓ $IMG: loaded"
+          else
+            echo "  ✗ $IMG: NOT FOUND"
+            ERRORS=$((ERRORS + 1))
+          fi
+        done
+
+        echo ""
+        if [ $ERRORS -gt 0 ]; then
+          echo "Run 'task pipeline-images' to build and load missing images."
+          exit 1
+        fi
+        echo "All pipeline images verified!"
+
+  # ===========================================================================
+  # Pipeline Execution Tasks
+  # ===========================================================================
+
+  pipeline:spark:
+    desc: Run Spark Iceberg transformation pipeline (direct SparkApplication)
+    vars:
+      BRANCH: '{{.BRANCH | default "dev"}}'
+      DESTINATION: '{{.DESTINATION | default "lakefs"}}'
+      TEST_MODE: '{{.TEST_MODE | default "false"}}'
+    cmds:
+      - |
+        ARGS="--branch {{.BRANCH}} --transform-engine kubeflow --destination {{.DESTINATION}}"
+
+        if [ "{{.TEST_MODE}}" = "true" ]; then
+          ARGS="$ARGS --test-mode"
+        fi
+
+        # Skip ingestion if data already exists
+        ARGS="$ARGS --skip-ingestion --skip-feast"
+
+        echo "Running Spark transformation pipeline..."
+        echo "  Branch: {{.BRANCH}}"
+        echo "  Destination: {{.DESTINATION}}"
+        echo ""
+
+        uv run tools/scripts/run_kronodroid_pipeline.py $ARGS
+
+  pipeline:spark:kfp:
+    desc: Run Spark Iceberg transformation pipeline via KFP client
+    vars:
+      BRANCH: '{{.BRANCH | default "dev"}}'
+      DESTINATION: '{{.DESTINATION | default "lakefs"}}'
+    cmds:
+      - |
+        echo "Ensuring secrets are synced..."
+        task secrets:sync
+
+        echo ""
+        echo "Running Spark transformation pipeline via KFP..."
+        echo "  Branch: {{.BRANCH}}"
+        echo "  Destination: {{.DESTINATION}}"
+        echo ""
+
+        uv run tools/scripts/run_kronodroid_pipeline.py \
+          --branch "{{.BRANCH}}" \
+          --transform-engine kubeflow \
+          --destination "{{.DESTINATION}}" \
+          --use-kfp-client \
+          --skip-ingestion \
+          --skip-feast
+
+  pipeline:full:
+    desc: Run full pipeline (ingest -> transform -> feast)
+    vars:
+      BRANCH: '{{.BRANCH | default "dev"}}'
+      DESTINATION: '{{.DESTINATION | default "lakefs"}}'
+    cmds:
+      - |
+        echo "Ensuring secrets are synced..."
+        task secrets:sync
+
+        echo ""
+        echo "Running full pipeline..."
+        uv run tools/scripts/run_kronodroid_pipeline.py \
+          --branch "{{.BRANCH}}" \
+          --transform-engine kubeflow \
+          --destination "{{.DESTINATION}}"
+
+  pipeline:setup:
+    desc: Complete pipeline setup (sync secrets, build images, verify)
+    cmds:
+      - task: secrets:sync
+      - task: pipeline-images
+      - task: pipeline-images:verify
+      - task: secrets:verify
+      - |
+        echo ""
+        echo "=== Pipeline setup complete ==="
+        echo ""
+        echo "You can now run pipelines with:"
+        echo "  task pipeline:spark BRANCH=dev          # Direct SparkApplication"
+        echo "  task pipeline:spark:kfp BRANCH=dev      # Via KFP client"
+        echo "  task pipeline:full BRANCH=dev           # Full pipeline"

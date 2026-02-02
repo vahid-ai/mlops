@@ -1,0 +1,71 @@
+"""Android apps package - shared configurations and libraries."""
+
+load("@rules_kotlin//kotlin:core.bzl", "define_kt_toolchain")
+
+package(default_visibility = ["//apps/android:__subpackages__"])
+
+# =============================================================================
+# Kotlin Toolchain
+# =============================================================================
+
+define_kt_toolchain(
+    name = "kotlin_toolchain",
+    api_version = "2.0",
+    jvm_target = "17",
+    language_version = "2.0",
+)
+
+# =============================================================================
+# Shared Android Resources
+# =============================================================================
+
+# Common Android library dependencies that all apps can use
+exports_files([
+    "proguard-rules.pro",
+])
+
+# =============================================================================
+# ExecuTorch Models
+# =============================================================================
+
+# Reference ExecuTorch models exported from ML pipelines
+# Models should be placed in //models directory
+filegroup(
+    name = "executorch_models",
+    srcs = ["//models:exported_models"],
+    visibility = ["//visibility:public"],
+)
+
+# =============================================================================
+# Common Android Library
+# =============================================================================
+
+android_library(
+    name = "common",
+    srcs = glob(["common/src/main/**/*.kt"]),
+    custom_package = "com.dfp.common",
+    manifest = "common/src/main/AndroidManifest.xml" if glob(["common/src/main/AndroidManifest.xml"]) else None,
+    resource_files = glob(["common/src/main/res/**"]),
+    visibility = ["//visibility:public"],
+    deps = [
+        "@maven//:androidx_appcompat_appcompat",
+        "@maven//:androidx_core_core_ktx",
+        "@maven//:org_jetbrains_kotlinx_kotlinx_coroutines_android",
+        "@maven//:org_jetbrains_kotlinx_kotlinx_coroutines_core",
+    ],
+) if glob(["common/src/main/**/*.kt"]) else None
+
+# =============================================================================
+# Model Inference Library
+# =============================================================================
+
+android_library(
+    name = "model_inference",
+    srcs = glob(["model_inference/src/main/**/*.kt"]),
+    custom_package = "com.dfp.inference",
+    visibility = ["//visibility:public"],
+    deps = [
+        "@maven//:org_jetbrains_kotlinx_kotlinx_coroutines_core",
+        "@maven//:org_pytorch_executorch",
+    ],
+) if glob(["model_inference/src/main/**/*.kt"]) else None

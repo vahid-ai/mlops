@@ -74,3 +74,12 @@ derby.log
 # Iceberg metadata (local testing)
 *.metadata.json
 *.avro
+
+# Bazel
+bazel-*
+user.bazelrc
+.bazelrc.user
+
+# ExecuTorch models (large binaries - use LFS or artifact storage)
+models/*.pte
+!models/test/*.pte

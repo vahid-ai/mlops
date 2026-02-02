@@ -1,1 +1,63 @@
-# Placeholder Bazel build for ExecuTorch runtime bindings.
+"""ExecuTorch runtime bindings and export tools.
+
+This package provides:
+- Python export tools (export/) for converting PyTorch → ExecuTorch
+- Java/Kotlin bindings (java/) for Android integration
+- Native C++ code (native/) for custom operators
+"""
+
+package(default_visibility = ["//visibility:public"])
+
+# =============================================================================
+# Python Export Package
+# =============================================================================
+
+# The export/ directory contains Python code for model conversion.
+# It is run via uv, not built with Bazel:
+#   uv run python -m runtimes.executorch.export.cli export ...
+
+exports_files([
+    "export/__init__.py",
+    "export/exporter.py",
+    "export/mlflow_client.py",
+    "export/quantization.py",
+    "export/cli.py",
+])
+
+filegroup(
+    name = "export_srcs",
+    srcs = glob(["export/**/*.py"]),
+)
+
+# =============================================================================
+# Java/Kotlin Bindings
+# =============================================================================
+
+# Java bindings for ExecuTorch Android integration
+filegroup(
+    name = "java_srcs",
+    srcs = glob(["java/**/*.kt", "java/**/*.java"]),
+)
+
+# =============================================================================
+# Native Code
+# =============================================================================
+
+# C++ sources for custom operators or JNI bindings
+filegroup(
+    name = "native_srcs",
+    srcs = glob(["native/**/*.cpp", "native/**/*.h"]),
+)
+
+# =============================================================================
+# Pre-built ExecuTorch Libraries (if vendoring)
+# =============================================================================
+
+# Placeholder for pre-built .so/.a files if needed
+filegroup(
+    name = "prebuilt_libs",
+    srcs = glob([
+        "native/libs/**/*.so",
+        "native/libs/**/*.a",
+    ]),
+)

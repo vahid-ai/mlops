@@ -61,24 +61,24 @@ spec:
         valueFrom:
           secretKeyRef:
             name: {minio_secret_name}
-            key: access-key
+            key: MINIO_ACCESS_KEY_ID
       - name: MINIO_SECRET_ACCESS_KEY
         valueFrom:
           secretKeyRef:
             name: {minio_secret_name}
-            key: secret-key
+            key: MINIO_SECRET_ACCESS_KEY
       - name: LAKEFS_ENDPOINT_URL
         value: "{lakefs_endpoint}"
       - name: LAKEFS_ACCESS_KEY_ID
         valueFrom:
           secretKeyRef:
             name: {lakefs_secret_name}
-            key: access-key
+            key: LAKEFS_ACCESS_KEY_ID
       - name: LAKEFS_SECRET_ACCESS_KEY
         valueFrom:
           secretKeyRef:
             name: {lakefs_secret_name}
-            key: secret-key
+            key: LAKEFS_SECRET_ACCESS_KEY
       - name: LAKEFS_REPOSITORY
         value: "{lakefs_repository}"
       - name: LAKEFS_BRANCH
@@ -94,24 +94,24 @@ spec:
         valueFrom:
           secretKeyRef:
             name: {minio_secret_name}
-            key: access-key
+            key: MINIO_ACCESS_KEY_ID
       - name: MINIO_SECRET_ACCESS_KEY
         valueFrom:
           secretKeyRef:
             name: {minio_secret_name}
-            key: secret-key
+            key: MINIO_SECRET_ACCESS_KEY
       - name: LAKEFS_ENDPOINT_URL
         value: "{lakefs_endpoint}"
       - name: LAKEFS_ACCESS_KEY_ID
         valueFrom:
           secretKeyRef:
             name: {lakefs_secret_name}
-            key: access-key
+            key: LAKEFS_ACCESS_KEY_ID
       - name: LAKEFS_SECRET_ACCESS_KEY
         valueFrom:
           secretKeyRef:
             name: {lakefs_secret_name}
-            key: secret-key
+            key: LAKEFS_SECRET_ACCESS_KEY
       - name: LAKEFS_REPOSITORY
         value: "{lakefs_repository}"
       - name: LAKEFS_BRANCH
@@ -122,7 +122,7 @@ spec:
     spark.sql.iceberg.write.avro.compression-codec: snappy
     spark.sql.catalog.{catalog_name}: org.apache.iceberg.spark.SparkCatalog
     spark.sql.catalog.{catalog_name}.type: hadoop
-    spark.sql.catalog.{catalog_name}.warehouse: "s3a://{lakefs_repository}/{lakefs_branch}"
+    spark.sql.catalog.{catalog_name}.warehouse: "s3a://{lakefs_repository}/{target_branch}/iceberg"
     spark.hadoop.fs.s3a.impl: org.apache.hadoop.fs.s3a.S3AFileSystem
     spark.hadoop.fs.s3a.path.style.access: "true"
     spark.hadoop.fs.s3a.connection.ssl.enabled: "false"
@@ -493,7 +493,7 @@ spec:
     spark.sql.iceberg.write.avro.compression-codec: snappy
     spark.sql.catalog.{catalog_name}: org.apache.iceberg.spark.SparkCatalog
     spark.sql.catalog.{catalog_name}.type: hadoop
-    spark.sql.catalog.{catalog_name}.warehouse: "s3a://{lakefs_repository}/{lakefs_branch}"
+    spark.sql.catalog.{catalog_name}.warehouse: "s3a://{lakefs_repository}/{target_branch}/iceberg"
     spark.hadoop.fs.s3a.impl: org.apache.hadoop.fs.s3a.S3AFileSystem
     spark.hadoop.fs.s3a.path.style.access: "true"
     spark.hadoop.fs.s3a.connection.ssl.enabled: "false"
@@ -601,10 +601,10 @@ def run_spark_kronodroid_iceberg(
     marts_database: str = "kronodroid",
     catalog_name: str = "lakefs",
     driver_cores: int = 1,
-    driver_memory: str = "2g",
+    driver_memory: str = "512m",
     executor_cores: int = 2,
-    executor_instances: int = 2,
-    executor_memory: str = "2g",
+    executor_instances: int = 1,
+    executor_memory: str = "512m",
     timeout_seconds: int = 3600,
 ) -> SparkJobOutput:
     """Run the Spark Kronodroid Iceberg job (for testing outside KFP).
