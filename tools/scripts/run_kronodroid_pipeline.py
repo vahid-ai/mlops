@@ -163,7 +163,39 @@ def _ensure_k8s_prereqs(
             ),
         )
 
-    def _ensure_secret(secret_name: str, data: dict[str, str]) -> None:
+    _ensure_k8s_secrets(
+        namespace=namespace,
+        minio_secret_name=minio_secret_name,
+        lakefs_secret_name=lakefs_secret_name,
+    )
+
+
+def _ensure_k8s_secrets(
+    namespace: str,
+    minio_secret_name: str,
+    lakefs_secret_name: str,
+) -> None:
+    """Ensure credential secrets exist (and include compatible key names).
+
+    The repo's SparkOperator docs use secret keys `access-key` / `secret-key`,
+    while KFP components and other code often expect env-var style keys. To avoid
+    `CreateContainerConfigError` from missing secret keys, we write both.
+    """
+    from kubernetes import client, config
+    from kubernetes.client.rest import ApiException
+
+    try:
+        config.load_incluster_config()
+    except config.ConfigException:
+        config.load_kube_config()
+
+    core_api = client.CoreV1Api()
+
+    def _upsert_secret(secret_name: str, string_data: dict[str, str]) -> None:
+        filtered = {k: v for k, v in string_data.items() if v}
+        if not filtered:
+            return
+
         try:
             core_api.read_namespaced_secret(secret_name, namespace)
         except ApiException as e:
@@ -174,24 +206,112 @@ def _ensure_k8s_prereqs(
                 client.V1Secret(
                     metadata=client.V1ObjectMeta(name=secret_name),
                     type="Opaque",
-                    string_data={k: v for k, v in data.items() if v},
+                    string_data=filtered,
                 ),
             )
+            return
 
-    _ensure_secret(
+        core_api.patch_namespaced_secret(
+            secret_name,
+            namespace,
+            {"type": "Opaque", "stringData": filtered},
+        )
+
+    minio_access_key = os.getenv("MINIO_ACCESS_KEY_ID", "")
+    minio_secret_key = os.getenv("MINIO_SECRET_ACCESS_KEY", "")
+    lakefs_access_key = os.getenv("LAKEFS_ACCESS_KEY_ID", "")
+    lakefs_secret_key = os.getenv("LAKEFS_SECRET_ACCESS_KEY", "")
+
+    _upsert_secret(
         minio_secret_name,
         {
-            "MINIO_ACCESS_KEY_ID": os.getenv("MINIO_ACCESS_KEY_ID", ""),
-            "MINIO_SECRET_ACCESS_KEY": os.getenv("MINIO_SECRET_ACCESS_KEY", ""),
+            "access-key": minio_access_key,
+            "secret-key": minio_secret_key,
+            "MINIO_ACCESS_KEY_ID": minio_access_key,
+            "MINIO_SECRET_ACCESS_KEY": minio_secret_key,
         },
     )
-    _ensure_secret(
+    _upsert_secret(
         lakefs_secret_name,
         {
-            "LAKEFS_ACCESS_KEY_ID": os.getenv("LAKEFS_ACCESS_KEY_ID", ""),
-            "LAKEFS_SECRET_ACCESS_KEY": os.getenv("LAKEFS_SECRET_ACCESS_KEY", ""),
+            "access-key": lakefs_access_key,
+            "secret-key": lakefs_secret_key,
+            "LAKEFS_ACCESS_KEY_ID": lakefs_access_key,
+            "LAKEFS_SECRET_ACCESS_KEY": lakefs_secret_key,
         },
     )
+
+
+def _ensure_kfp_runner_can_manage_sparkapplications(
+    *,
+    spark_namespace: str,
+    kfp_namespace: str,
+    kfp_service_account: str,
+) -> None:
+    """Allow the KFP runner SA to create/get/watch SparkApplications in the Spark namespace.
+
+    When submitting via the KFP client, the component that creates the SparkApplication
+    runs as `system:serviceaccount:<kfp_namespace>:<kfp_service_account>` (typically
+    `kubeflow:pipeline-runner`). That service account must be granted RBAC in the
+    Spark job namespace (e.g. `dfp`) to manage SparkApplications.
+    """
+    from kubernetes import client, config
+    from kubernetes.client.rest import ApiException
+
+    try:
+        config.load_incluster_config()
+    except config.ConfigException:
+        config.load_kube_config()
+
+    rbac_api = client.RbacAuthorizationV1Api()
+
+    role_name = "kfp-sparkapplication-role"
+    role_binding_name = "kfp-sparkapplication-rolebinding"
+
+    role_rules = [
+        client.V1PolicyRule(
+            api_groups=["sparkoperator.k8s.io"],
+            resources=["sparkapplications"],
+            verbs=["create", "get", "list", "watch", "delete", "patch"],
+        )
+    ]
+
+    try:
+        rbac_api.read_namespaced_role(role_name, spark_namespace)
+    except ApiException as e:
+        if e.status != 404:
+            raise
+        rbac_api.create_namespaced_role(
+            spark_namespace,
+            client.V1Role(
+                metadata=client.V1ObjectMeta(name=role_name),
+                rules=role_rules,
+            ),
+        )
+
+    try:
+        rbac_api.read_namespaced_role_binding(role_binding_name, spark_namespace)
+    except ApiException as e:
+        if e.status != 404:
+            raise
+        rbac_api.create_namespaced_role_binding(
+            spark_namespace,
+            client.V1RoleBinding(
+                metadata=client.V1ObjectMeta(name=role_binding_name),
+                role_ref=client.V1RoleRef(
+                    api_group="rbac.authorization.k8s.io",
+                    kind="Role",
+                    name=role_name,
+                ),
+                subjects=[
+                    client.RbacV1Subject(
+                        kind="ServiceAccount",
+                        name=kfp_service_account,
+                        namespace=kfp_namespace,
+                    )
+                ],
+            ),
+        )
 
 
 def _check_sparkoperator_crd() -> tuple[bool, bool]:
@@ -415,6 +535,8 @@ def run_kubeflow_transformations(
     timeout_seconds: int = 3600,
     use_kfp_client: bool = False,
     kfp_host: str | None = None,
+    kfp_namespace: str = "kubeflow",
+    kfp_service_account: str = "pipeline-runner",
     test_limit: int = 0,
 ) -> bool:
     """Run Kubeflow SparkOperator transformations to build Iceberg tables.
@@ -475,10 +597,14 @@ def run_kubeflow_transformations(
         raw_bucket = lakefs_repository
         raw_endpoint = lakefs_cluster_endpoint
         raw_prefix = f"{lakefs_branch}/kronodroid_raw"
+        # When reading raw data from the LakeFS S3 gateway, use LakeFS credentials
+        # for the "minio_*" secret inputs expected by the pipeline/component.
+        spark_input_secret_name = lakefs_secret_name
     else:
         raw_bucket = minio_bucket
         raw_endpoint = minio_cluster_endpoint
         raw_prefix = "kronodroid_raw"
+        spark_input_secret_name = minio_secret_name
 
     print(f"  MinIO endpoint (host): {minio_endpoint}")
     print(f"  MinIO endpoint (cluster): {minio_cluster_endpoint}")
@@ -491,18 +617,33 @@ def run_kubeflow_transformations(
     print(f"  Raw input bucket: {raw_bucket}")
     print(f"  Raw input prefix: {raw_prefix}")
     print(f"  Transform engine: Kubeflow SparkOperator")
+    print(f"  Spark input secret: {spark_input_secret_name}")
+    print(f"  LakeFS secret: {lakefs_secret_name}")
 
     # Ensure K8s objects exist before submitting (SA/RBAC/Secrets).
     _ensure_k8s_prereqs(
         namespace=namespace,
         service_account=service_account,
-        minio_secret_name=minio_secret_name,
+        minio_secret_name=spark_input_secret_name,
         lakefs_secret_name=lakefs_secret_name,
     )
 
     if use_kfp_client:
+        # KFP component pods run in the KFP namespace; they need these secrets
+        # for `secretAsEnv` injection (otherwise pods can fail with CreateContainerConfigError).
+        _ensure_k8s_secrets(
+            namespace=kfp_namespace,
+            minio_secret_name=spark_input_secret_name,
+            lakefs_secret_name=lakefs_secret_name,
+        )
+        _ensure_kfp_runner_can_manage_sparkapplications(
+            spark_namespace=namespace,
+            kfp_namespace=kfp_namespace,
+            kfp_service_account=kfp_service_account,
+        )
         return _run_kubeflow_via_kfp_client(
             kfp_host=kfp_host,
+            kfp_namespace=kfp_namespace,
             minio_endpoint=raw_endpoint,
             minio_bucket=raw_bucket,
             minio_prefix=raw_prefix,
@@ -512,7 +653,7 @@ def run_kubeflow_transformations(
             spark_image=spark_image,
             namespace=namespace,
             service_account=service_account,
-            minio_secret_name=minio_secret_name,
+            minio_secret_name=spark_input_secret_name,
             lakefs_secret_name=lakefs_secret_name,
             driver_cores=driver_cores,
             driver_memory=driver_memory,
@@ -536,7 +677,7 @@ def run_kubeflow_transformations(
             spark_image=spark_image,
             namespace=namespace,
             service_account=service_account,
-            minio_secret_name=minio_secret_name,
+            minio_secret_name=spark_input_secret_name,
             lakefs_secret_name=lakefs_secret_name,
             driver_cores=driver_cores,
             driver_memory=driver_memory,
@@ -550,6 +691,7 @@ def run_kubeflow_transformations(
 
 def _run_kubeflow_via_kfp_client(
     kfp_host: str | None,
+    kfp_namespace: str,
     minio_endpoint: str,
     minio_bucket: str,
     minio_prefix: str,
@@ -583,9 +725,10 @@ def _run_kubeflow_via_kfp_client(
         kfp_host = os.getenv("KFP_HOST", "http://localhost:8080")
 
     print(f"  KFP host: {kfp_host}")
+    print(f"  KFP namespace: {kfp_namespace}")
 
     try:
-        client = kfp.Client(host=kfp_host)
+        client = kfp.Client(host=kfp_host, namespace=kfp_namespace)
 
         run = client.create_run_from_pipeline_func(
             kronodroid_iceberg_pipeline,
@@ -1479,6 +1622,16 @@ def main():
         help="Kubeflow Pipelines host URL (for --use-kfp-client)",
     )
     parser.add_argument(
+        "--kfp-namespace",
+        default=os.getenv("KFP_NAMESPACE", "kubeflow"),
+        help="KFP namespace where pipeline pods run (default: env KFP_NAMESPACE or 'kubeflow')",
+    )
+    parser.add_argument(
+        "--kfp-service-account",
+        default=os.getenv("KFP_SERVICE_ACCOUNT", "pipeline-runner"),
+        help="Kubernetes ServiceAccount name used by KFP runs (default: env KFP_SERVICE_ACCOUNT or 'pipeline-runner')",
+    )
+    parser.add_argument(
         "--spark-image",
         default="dfp-spark:latest",
         help="Spark Docker image (for kubeflow engine)",
@@ -1672,6 +1825,8 @@ def main():
                     timeout_seconds=spark_timeout,
                     use_kfp_client=args.use_kfp_client,
                     kfp_host=args.kfp_host,
+                    kfp_namespace=args.kfp_namespace,
+                    kfp_service_account=args.kfp_service_account,
                     driver_memory=driver_memory,
                     executor_memory=executor_memory,
                     executor_instances=executor_instances,

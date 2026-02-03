@@ -149,16 +149,18 @@ def kronodroid_iceberg_pipeline(
         task=spark_task,
         secret_name=minio_secret_name,
         secret_key_to_env={
-            "MINIO_ACCESS_KEY_ID": "MINIO_ACCESS_KEY_ID",
-            "MINIO_SECRET_ACCESS_KEY": "MINIO_SECRET_ACCESS_KEY",
+            # Prefer the canonical keys used by infra/k8s/spark-operator/README.md
+            # (env var names are set by the mapping destination).
+            "access-key": "MINIO_ACCESS_KEY_ID",
+            "secret-key": "MINIO_SECRET_ACCESS_KEY",
         },
     )
     kubernetes.use_secret_as_env(
         task=spark_task,
         secret_name=lakefs_secret_name,
         secret_key_to_env={
-            "LAKEFS_ACCESS_KEY_ID": "LAKEFS_ACCESS_KEY_ID",
-            "LAKEFS_SECRET_ACCESS_KEY": "LAKEFS_SECRET_ACCESS_KEY",
+            "access-key": "LAKEFS_ACCESS_KEY_ID",
+            "secret-key": "LAKEFS_SECRET_ACCESS_KEY",
         },
     )
 
@@ -182,8 +184,8 @@ def kronodroid_iceberg_pipeline(
         task=commit_merge_task,
         secret_name=lakefs_secret_name,
         secret_key_to_env={
-            "LAKEFS_ACCESS_KEY_ID": "LAKEFS_ACCESS_KEY_ID",
-            "LAKEFS_SECRET_ACCESS_KEY": "LAKEFS_SECRET_ACCESS_KEY",
+            "access-key": "LAKEFS_ACCESS_KEY_ID",
+            "secret-key": "LAKEFS_SECRET_ACCESS_KEY",
         },
     )
 

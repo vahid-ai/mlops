@@ -255,6 +255,10 @@ tasks:
         echo ""
         echo "Step 5/8: Building and loading Spark image..."
         task spark-image
+
+        echo ""
+        echo "Step 5b/8: Building and loading LakeFS component image..."
+        task lakefs-component-image
         
         echo ""
         echo "Step 6/8: Waiting for all pods to be ready..."
@@ -564,6 +568,26 @@ tasks:
     cmds:
       - task: spark-image:build
       - task: spark-image:load
+
+  lakefs-component-image:build:
+    desc: Build the dfp-lakefs-component Docker image
+    vars:
+      LAKEFS_COMPONENT_IMAGE: '{{.LAKEFS_COMPONENT_IMAGE | default "dfp-lakefs-component:v2"}}'
+    cmds:
+      - docker build -t "{{.LAKEFS_COMPONENT_IMAGE}}" -f tools/docker/Dockerfile.lakefs_component .
+
+  lakefs-component-image:load:
+    desc: Load dfp-lakefs-component image into kind cluster
+    vars:
+      LAKEFS_COMPONENT_IMAGE: '{{.LAKEFS_COMPONENT_IMAGE | default "dfp-lakefs-component:v2"}}'
+    cmds:
+      - kind load docker-image "{{.LAKEFS_COMPONENT_IMAGE}}" --name "{{.CLUSTER_NAME}}"
+
+  lakefs-component-image:
+    desc: Build and load dfp-lakefs-component image into kind
+    cmds:
+      - task: lakefs-component-image:build
+      - task: lakefs-component-image:load
 
   spark-operator:install:
     desc: Install Spark Operator via Helm
@@ -992,9 +1016,10 @@ tasks:
       - task: autoencoder-image:load
 
   pipeline-images:
-    desc: Build and load all pipeline images (spark + autoencoder)
+    desc: Build and load all pipeline images (spark + lakefs component + autoencoder)
     cmds:
       - task: spark-image
+      - task: lakefs-component-image
       - task: autoencoder-image
 
   pipeline-images:verify:
@@ -1004,7 +1029,7 @@ tasks:
         echo "=== Checking pipeline images in kind cluster ==="
         echo ""
 
-        IMAGES=("dfp-spark:latest" "dfp-autoencoder-train:v6")
+        IMAGES=("dfp-spark:latest" "dfp-lakefs-component:v2" "dfp-autoencoder-train:v6")
         ERRORS=0
 
         for IMG in "${IMAGES[@]}"; do
