@@ -37,13 +37,13 @@ Before running Spark jobs, create the required secrets:
 ```bash
 # MinIO credentials
 kubectl create secret generic minio-credentials \
-  --from-literal=access-key=minioadmin \
-  --from-literal=secret-key=minioadmin
+  --from-literal=MINIO_ACCESS_KEY_ID=minioadmin \
+  --from-literal=MINIO_SECRET_ACCESS_KEY=minioadmin
 
 # LakeFS credentials
 kubectl create secret generic lakefs-credentials \
-  --from-literal=access-key=${LAKEFS_ACCESS_KEY_ID} \
-  --from-literal=secret-key=${LAKEFS_SECRET_ACCESS_KEY}
+  --from-literal=LAKEFS_ACCESS_KEY_ID=${LAKEFS_ACCESS_KEY_ID} \
+  --from-literal=LAKEFS_SECRET_ACCESS_KEY=${LAKEFS_SECRET_ACCESS_KEY}
 ```
 
 ### 3. Apply RBAC
@@ -117,11 +117,11 @@ The Spark job expects these environment variables (injected via secrets):
 | Variable | Secret | Key |
 |----------|--------|-----|
 | `MINIO_ENDPOINT_URL` | - | Hardcoded in spec |
-| `MINIO_ACCESS_KEY_ID` | `minio-credentials` | `access-key` |
-| `MINIO_SECRET_ACCESS_KEY` | `minio-credentials` | `secret-key` |
+| `MINIO_ACCESS_KEY_ID` | `minio-credentials` | `MINIO_ACCESS_KEY_ID` |
+| `MINIO_SECRET_ACCESS_KEY` | `minio-credentials` | `MINIO_SECRET_ACCESS_KEY` |
 | `LAKEFS_ENDPOINT_URL` | - | Hardcoded in spec |
-| `LAKEFS_ACCESS_KEY_ID` | `lakefs-credentials` | `access-key` |
-| `LAKEFS_SECRET_ACCESS_KEY` | `lakefs-credentials` | `secret-key` |
+| `LAKEFS_ACCESS_KEY_ID` | `lakefs-credentials` | `LAKEFS_ACCESS_KEY_ID` |
+| `LAKEFS_SECRET_ACCESS_KEY` | `lakefs-credentials` | `LAKEFS_SECRET_ACCESS_KEY` |
 | `LAKEFS_REPOSITORY` | - | Hardcoded in spec |
 | `LAKEFS_BRANCH` | - | Passed as argument |
 
@@ -137,7 +137,7 @@ sparkConf:
   # LakeFS Iceberg REST catalog
   spark.sql.catalog.lakefs: org.apache.iceberg.spark.SparkCatalog
   spark.sql.catalog.lakefs.catalog-impl: org.apache.iceberg.rest.RESTCatalog
-  spark.sql.catalog.lakefs.uri: http://lakefs:8000/api/v1/iceberg
+  spark.sql.catalog.lakefs.uri: http://lakefs.dfp:8000/api/v1/iceberg
   spark.sql.catalog.lakefs.warehouse: s3a://kronodroid/main/iceberg
   
   # S3A filesystem (path-style access for MinIO/LakeFS)
@@ -146,8 +146,8 @@ sparkConf:
   spark.hadoop.fs.s3a.connection.ssl.enabled: "false"
   
   # Per-bucket endpoints
-  spark.hadoop.fs.s3a.bucket.dlt-data.endpoint: http://minio:9000
-  spark.hadoop.fs.s3a.bucket.kronodroid.endpoint: http://lakefs:8000
+  spark.hadoop.fs.s3a.bucket.dlt-data.endpoint: http://minio.dfp:9000
+  spark.hadoop.fs.s3a.bucket.kronodroid.endpoint: http://lakefs.dfp:8000
 ```
 
 ## Troubleshooting

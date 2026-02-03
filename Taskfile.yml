@@ -894,8 +894,6 @@ tasks:
           --namespace="{{.DFP_NAMESPACE}}" \
           --from-literal=MINIO_ACCESS_KEY_ID="$MINIO_ACCESS_KEY" \
           --from-literal=MINIO_SECRET_ACCESS_KEY="$MINIO_SECRET_KEY" \
-          --from-literal=AWS_ACCESS_KEY_ID="$MINIO_ACCESS_KEY" \
-          --from-literal=AWS_SECRET_ACCESS_KEY="$MINIO_SECRET_KEY" \
           --dry-run=client -o yaml | kubectl apply -f -
 
         # Create lakefs-credentials in dfp namespace
@@ -913,8 +911,6 @@ tasks:
           --namespace="{{.KFP_NAMESPACE}}" \
           --from-literal=MINIO_ACCESS_KEY_ID="$MINIO_ACCESS_KEY" \
           --from-literal=MINIO_SECRET_ACCESS_KEY="$MINIO_SECRET_KEY" \
-          --from-literal=AWS_ACCESS_KEY_ID="$MINIO_ACCESS_KEY" \
-          --from-literal=AWS_SECRET_ACCESS_KEY="$MINIO_SECRET_KEY" \
           --dry-run=client -o yaml | kubectl apply -f -
 
         # Create lakefs-credentials in kubeflow namespace

@@ -175,12 +175,7 @@ def _ensure_k8s_secrets(
     minio_secret_name: str,
     lakefs_secret_name: str,
 ) -> None:
-    """Ensure credential secrets exist (and include compatible key names).
-
-    The repo's SparkOperator docs use secret keys `access-key` / `secret-key`,
-    while KFP components and other code often expect env-var style keys. To avoid
-    `CreateContainerConfigError` from missing secret keys, we write both.
-    """
+    """Ensure credential secrets exist."""
     from kubernetes import client, config
     from kubernetes.client.rest import ApiException
 
@@ -225,8 +220,6 @@ def _ensure_k8s_secrets(
     _upsert_secret(
         minio_secret_name,
         {
-            "access-key": minio_access_key,
-            "secret-key": minio_secret_key,
             "MINIO_ACCESS_KEY_ID": minio_access_key,
             "MINIO_SECRET_ACCESS_KEY": minio_secret_key,
         },
@@ -234,8 +227,6 @@ def _ensure_k8s_secrets(
     _upsert_secret(
         lakefs_secret_name,
         {
-            "access-key": lakefs_access_key,
-            "secret-key": lakefs_secret_key,
             "LAKEFS_ACCESS_KEY_ID": lakefs_access_key,
             "LAKEFS_SECRET_ACCESS_KEY": lakefs_secret_key,
         },
@@ -523,7 +514,7 @@ def run_kubeflow_transformations(
     lakefs_endpoint: str | None = None,
     lakefs_repository: str | None = None,
     spark_image: str = "dfp-spark:latest",
-    namespace: str = "default",
+    namespace: str = "dfp",
     service_account: str = "spark",
     minio_secret_name: str = "minio-credentials",
     lakefs_secret_name: str = "lakefs-credentials",

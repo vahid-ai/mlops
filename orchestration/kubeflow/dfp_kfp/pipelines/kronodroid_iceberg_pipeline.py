@@ -23,11 +23,7 @@ Usage:
     )
 """
 
-import uuid
-from typing import NamedTuple
-
-from kfp import dsl, kubernetes
-from kfp.dsl import PipelineTask
+from kfp import dsl
 
 from orchestration.kubeflow.dfp_kfp.components.spark_kronodroid_iceberg_component import (
     spark_kronodroid_iceberg_op,
@@ -35,20 +31,23 @@ from orchestration.kubeflow.dfp_kfp.components.spark_kronodroid_iceberg_componen
 from orchestration.kubeflow.dfp_kfp.components.lakefs_commit_merge_component import (
     lakefs_commit_merge_op,
 )
-
-
-# Default configuration values
-DEFAULT_MINIO_ENDPOINT = "http://minio:9000"
-DEFAULT_MINIO_BUCKET = "dlt-data"
-DEFAULT_MINIO_PREFIX = "kronodroid_raw"
-DEFAULT_LAKEFS_ENDPOINT = "http://lakefs:8000"
-DEFAULT_LAKEFS_REPOSITORY = "kronodroid"
-DEFAULT_LAKEFS_BRANCH = "main"
-DEFAULT_SPARK_IMAGE = "apache/spark:3.5.0-python3"
-DEFAULT_NAMESPACE = "default"
-DEFAULT_SERVICE_ACCOUNT = "spark"
-DEFAULT_MINIO_SECRET = "minio-credentials"
-DEFAULT_LAKEFS_SECRET = "lakefs-credentials"
+from orchestration.kubeflow.dfp_kfp.config import (
+    DEFAULT_ICEBERG_CATALOG,
+    DEFAULT_ICEBERG_DATABASE,
+    DEFAULT_ICEBERG_STAGING_DATABASE,
+    DEFAULT_LAKEFS_BRANCH,
+    DEFAULT_LAKEFS_ENDPOINT,
+    DEFAULT_LAKEFS_REPOSITORY,
+    DEFAULT_LAKEFS_SECRET_NAME,
+    DEFAULT_MINIO_BUCKET,
+    DEFAULT_MINIO_ENDPOINT,
+    DEFAULT_MINIO_PREFIX,
+    DEFAULT_MINIO_SECRET_NAME,
+    DEFAULT_SPARK_IMAGE,
+    DEFAULT_SPARK_NAMESPACE,
+    DEFAULT_SPARK_SERVICE_ACCOUNT,
+)
+from orchestration.kubeflow.dfp_kfp.k8s_utils import use_lakefs_credentials, use_minio_credentials
 
 
 @dsl.pipeline(
@@ -60,16 +59,16 @@ def kronodroid_iceberg_pipeline(
     minio_endpoint: str = DEFAULT_MINIO_ENDPOINT,
     minio_bucket: str = DEFAULT_MINIO_BUCKET,
     minio_prefix: str = DEFAULT_MINIO_PREFIX,
-    minio_secret_name: str = DEFAULT_MINIO_SECRET,
+    minio_secret_name: str = DEFAULT_MINIO_SECRET_NAME,
     # LakeFS configuration
     lakefs_endpoint: str = DEFAULT_LAKEFS_ENDPOINT,
     lakefs_repository: str = DEFAULT_LAKEFS_REPOSITORY,
     target_branch: str = DEFAULT_LAKEFS_BRANCH,
-    lakefs_secret_name: str = DEFAULT_LAKEFS_SECRET,
+    lakefs_secret_name: str = DEFAULT_LAKEFS_SECRET_NAME,
     # Spark configuration
     spark_image: str = DEFAULT_SPARK_IMAGE,
-    namespace: str = DEFAULT_NAMESPACE,
-    service_account: str = DEFAULT_SERVICE_ACCOUNT,
+    namespace: str = DEFAULT_SPARK_NAMESPACE,
+    service_account: str = DEFAULT_SPARK_SERVICE_ACCOUNT,
     driver_cores: int = 1,
     driver_memory: str = "512m",
     executor_cores: int = 2,
@@ -77,9 +76,9 @@ def kronodroid_iceberg_pipeline(
     executor_memory: str = "512m",
     spark_timeout_seconds: int = 3600,
     # Iceberg configuration
-    staging_database: str = "stg_kronodroid",
-    marts_database: str = "kronodroid",
-    catalog_name: str = "lakefs",
+    staging_database: str = DEFAULT_ICEBERG_STAGING_DATABASE,
+    marts_database: str = DEFAULT_ICEBERG_DATABASE,
+    catalog_name: str = DEFAULT_ICEBERG_CATALOG,
     # Pipeline options
     delete_source_branch: bool = True,
     run_feast_apply: bool = False,
@@ -144,25 +143,8 @@ def kronodroid_iceberg_pipeline(
         timeout_seconds=spark_timeout_seconds,
     ).set_memory_limit("4Gi").set_memory_request("2Gi").set_cpu_limit("2000m").set_cpu_request("500m")
 
-    # Configure credentials for Spark task
-    kubernetes.use_secret_as_env(
-        task=spark_task,
-        secret_name=minio_secret_name,
-        secret_key_to_env={
-            # Prefer the canonical keys used by infra/k8s/spark-operator/README.md
-            # (env var names are set by the mapping destination).
-            "access-key": "MINIO_ACCESS_KEY_ID",
-            "secret-key": "MINIO_SECRET_ACCESS_KEY",
-        },
-    )
-    kubernetes.use_secret_as_env(
-        task=spark_task,
-        secret_name=lakefs_secret_name,
-        secret_key_to_env={
-            "access-key": "LAKEFS_ACCESS_KEY_ID",
-            "secret-key": "LAKEFS_SECRET_ACCESS_KEY",
-        },
-    )
+    use_minio_credentials(spark_task, secret_name=minio_secret_name)
+    use_lakefs_credentials(spark_task, secret_name=lakefs_secret_name)
 
     # Step 2: Commit and merge LakeFS branch
     commit_merge_task = lakefs_commit_merge_op(
@@ -179,15 +161,7 @@ def kronodroid_iceberg_pipeline(
     # Set dependency
     commit_merge_task.after(spark_task)
 
-    # Configure LakeFS credentials
-    kubernetes.use_secret_as_env(
-        task=commit_merge_task,
-        secret_name=lakefs_secret_name,
-        secret_key_to_env={
-            "access-key": "LAKEFS_ACCESS_KEY_ID",
-            "secret-key": "LAKEFS_SECRET_ACCESS_KEY",
-        },
-    )
+    use_lakefs_credentials(commit_merge_task, secret_name=lakefs_secret_name)
 
     # Step 3: (Optional) Feast apply - would plug into existing component
     # if run_feast_apply:
@@ -207,16 +181,16 @@ def kronodroid_full_pipeline(
     minio_endpoint: str = DEFAULT_MINIO_ENDPOINT,
     minio_bucket: str = DEFAULT_MINIO_BUCKET,
     minio_prefix: str = DEFAULT_MINIO_PREFIX,
-    minio_secret_name: str = DEFAULT_MINIO_SECRET,
+    minio_secret_name: str = DEFAULT_MINIO_SECRET_NAME,
     # LakeFS configuration
     lakefs_endpoint: str = DEFAULT_LAKEFS_ENDPOINT,
     lakefs_repository: str = DEFAULT_LAKEFS_REPOSITORY,
     target_branch: str = DEFAULT_LAKEFS_BRANCH,
-    lakefs_secret_name: str = DEFAULT_LAKEFS_SECRET,
+    lakefs_secret_name: str = DEFAULT_LAKEFS_SECRET_NAME,
     # Spark configuration
     spark_image: str = DEFAULT_SPARK_IMAGE,
-    namespace: str = DEFAULT_NAMESPACE,
-    service_account: str = DEFAULT_SERVICE_ACCOUNT,
+    namespace: str = DEFAULT_SPARK_NAMESPACE,
+    service_account: str = DEFAULT_SPARK_SERVICE_ACCOUNT,
     driver_cores: int = 1,
     driver_memory: str = "512m",
     executor_cores: int = 2,
@@ -224,9 +198,9 @@ def kronodroid_full_pipeline(
     executor_memory: str = "512m",
     spark_timeout_seconds: int = 3600,
     # Iceberg configuration
-    staging_database: str = "stg_kronodroid",
-    marts_database: str = "kronodroid",
-    catalog_name: str = "lakefs",
+    staging_database: str = DEFAULT_ICEBERG_STAGING_DATABASE,
+    marts_database: str = DEFAULT_ICEBERG_DATABASE,
+    catalog_name: str = DEFAULT_ICEBERG_CATALOG,
     # Feast configuration
     run_feast_apply: bool = True,
     materialize_days: int = 30,
@@ -298,24 +272,8 @@ def kronodroid_full_pipeline(
         timeout_seconds=spark_timeout_seconds,
     ).set_memory_limit("4Gi").set_memory_request("2Gi").set_cpu_limit("2000m").set_cpu_request("500m")
 
-    # Configure MinIO credentials for Spark task
-    kubernetes.use_secret_as_env(
-        task=spark_task,
-        secret_name=minio_secret_name,
-        secret_key_to_env={
-            "MINIO_ACCESS_KEY_ID": "MINIO_ACCESS_KEY_ID",
-            "MINIO_SECRET_ACCESS_KEY": "MINIO_SECRET_ACCESS_KEY",
-        },
-    )
-    # Configure LakeFS credentials for Spark task
-    kubernetes.use_secret_as_env(
-        task=spark_task,
-        secret_name=lakefs_secret_name,
-        secret_key_to_env={
-            "LAKEFS_ACCESS_KEY_ID": "LAKEFS_ACCESS_KEY_ID",
-            "LAKEFS_SECRET_ACCESS_KEY": "LAKEFS_SECRET_ACCESS_KEY",
-        },
-    )
+    use_minio_credentials(spark_task, secret_name=minio_secret_name)
+    use_lakefs_credentials(spark_task, secret_name=lakefs_secret_name)
 
     # Step 3: LakeFS commit + merge
     commit_merge_task = lakefs_commit_merge_op(
@@ -329,14 +287,7 @@ def kronodroid_full_pipeline(
         delete_source_branch=True,
     ).set_memory_limit("2Gi").set_memory_request("512Mi").set_cpu_limit("1000m").set_cpu_request("250m")
 
-    kubernetes.use_secret_as_env(
-        task=commit_merge_task,
-        secret_name=lakefs_secret_name,
-        secret_key_to_env={
-            "LAKEFS_ACCESS_KEY_ID": "LAKEFS_ACCESS_KEY_ID",
-            "LAKEFS_SECRET_ACCESS_KEY": "LAKEFS_SECRET_ACCESS_KEY",
-        },
-    )
+    use_lakefs_credentials(commit_merge_task, secret_name=lakefs_secret_name)
 
     # Step 4: Feast apply (optional) - plug into existing stubs
     # if run_feast_apply:

@@ -17,6 +17,8 @@ from typing import NamedTuple
 
 from kfp import dsl
 
+from orchestration.kubeflow.dfp_kfp.config import DEFAULT_MINIO_ENDPOINT
+
 
 class TrainAutoencoderOutput(NamedTuple):
     """Output from the autoencoder training component."""
@@ -62,7 +64,7 @@ def train_kronodroid_autoencoder_op(
     seed: int,
     max_rows_per_split: int,
     # MLflow artifact storage (S3/MinIO)
-    minio_endpoint: str = "http://minio:9000",
+    minio_endpoint: str = DEFAULT_MINIO_ENDPOINT,
     # Logging and monitoring config
     log_level: str = "INFO",
     enable_tensorboard: bool = True,
@@ -205,6 +207,20 @@ def train_kronodroid_autoencoder_op(
 
     # Set MLflow S3 endpoint for artifact storage
     os.environ["MLFLOW_S3_ENDPOINT_URL"] = minio_endpoint
+    # Normalize credentials for S3-compatible artifact storage.
+    #
+    # The repo standardizes on `MINIO_*` env vars for MinIO, while MLflow/boto3
+    # typically expect `AWS_*`. Avoid requiring duplicated secret keys by
+    # deriving AWS-style vars from MINIO-style vars when needed.
+    if not os.environ.get("AWS_ACCESS_KEY_ID"):
+        minio_access_key = os.environ.get("MINIO_ACCESS_KEY_ID")
+        if minio_access_key:
+            os.environ["AWS_ACCESS_KEY_ID"] = minio_access_key
+    if not os.environ.get("AWS_SECRET_ACCESS_KEY"):
+        minio_secret_key = os.environ.get("MINIO_SECRET_ACCESS_KEY")
+        if minio_secret_key:
+            os.environ["AWS_SECRET_ACCESS_KEY"] = minio_secret_key
+    os.environ.setdefault("AWS_DEFAULT_REGION", "us-east-1")
 
     # Set LakeFS endpoint for Spark/Feast config variable substitution
     os.environ["LAKEFS_ENDPOINT_URL"] = lakefs_endpoint

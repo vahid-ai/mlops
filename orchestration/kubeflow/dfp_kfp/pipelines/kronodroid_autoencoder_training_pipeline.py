@@ -34,7 +34,6 @@ Usage:
 """
 
 import json
-from typing import List, NamedTuple
 
 from kfp import dsl, kubernetes
 
@@ -42,25 +41,32 @@ from orchestration.kubeflow.dfp_kfp.components.train_kronodroid_autoencoder_comp
     train_kronodroid_autoencoder_op,
     lakefs_tag_model_data_op,
 )
+from orchestration.kubeflow.dfp_kfp.config import (
+    DEFAULT_FEAST_CONFIGMAP_NAME,
+    DEFAULT_FEAST_MOUNT_PATH,
+    DEFAULT_ICEBERG_CATALOG,
+    DEFAULT_ICEBERG_DATABASE,
+    DEFAULT_ICEBERG_SOURCE_TABLE,
+    DEFAULT_LAKEFS_BRANCH,
+    DEFAULT_LAKEFS_ENDPOINT,
+    DEFAULT_LAKEFS_REPOSITORY,
+    DEFAULT_LAKEFS_SECRET_NAME,
+    DEFAULT_MLFLOW_TRACKING_URI,
+    DEFAULT_MINIO_ENDPOINT,
+    DEFAULT_MINIO_SECRET_NAME,
+)
+from orchestration.kubeflow.dfp_kfp.k8s_utils import (
+    mount_feast_repo,
+    use_lakefs_credentials,
+    use_minio_credentials,
+)
 
 
-# Default configuration values
-# Note: Using .dfp namespace suffix for cross-namespace access from kubeflow
-DEFAULT_MLFLOW_TRACKING_URI = "http://mlflow.dfp:5000"
 DEFAULT_MLFLOW_EXPERIMENT = "kronodroid-autoencoder"
 DEFAULT_MLFLOW_MODEL_NAME = "kronodroid_autoencoder"
-DEFAULT_MINIO_ENDPOINT = "http://minio.dfp:9000"
-DEFAULT_LAKEFS_ENDPOINT = "http://lakefs.dfp:8000"
-DEFAULT_LAKEFS_REPOSITORY = "kronodroid"
-DEFAULT_LAKEFS_BRANCH = "main"
-DEFAULT_ICEBERG_CATALOG = "lakefs"
-DEFAULT_ICEBERG_DATABASE = "kronodroid"
-DEFAULT_SOURCE_TABLE = "fct_training_dataset"
-DEFAULT_FEAST_REPO_PATH = "/feast"
 DEFAULT_FEAST_PROJECT = "dfp"
 DEFAULT_FEAST_FEATURE_VIEW = "malware_sample_features"
-DEFAULT_MINIO_SECRET = "minio-credentials"
-DEFAULT_LAKEFS_SECRET = "lakefs-credentials"
+DEFAULT_FEAST_REPO_PATH = DEFAULT_FEAST_MOUNT_PATH
 
 # Default feature names (22 syscall features)
 DEFAULT_FEATURE_NAMES = [
@@ -102,10 +108,10 @@ def kronodroid_autoencoder_training_pipeline(
     lakefs_endpoint: str = DEFAULT_LAKEFS_ENDPOINT,
     lakefs_repository: str = DEFAULT_LAKEFS_REPOSITORY,
     lakefs_ref: str = DEFAULT_LAKEFS_BRANCH,
-    lakefs_secret_name: str = DEFAULT_LAKEFS_SECRET,
+    lakefs_secret_name: str = DEFAULT_LAKEFS_SECRET_NAME,
     iceberg_catalog: str = DEFAULT_ICEBERG_CATALOG,
     iceberg_database: str = DEFAULT_ICEBERG_DATABASE,
-    source_table: str = DEFAULT_SOURCE_TABLE,
+    source_table: str = DEFAULT_ICEBERG_SOURCE_TABLE,
     # Feast configuration (for lineage tracking)
     feast_repo_path: str = DEFAULT_FEAST_REPO_PATH,
     feast_project: str = DEFAULT_FEAST_PROJECT,
@@ -122,7 +128,7 @@ def kronodroid_autoencoder_training_pipeline(
     max_rows_per_split: int = 0,
     # MLflow artifact storage (MinIO)
     minio_endpoint: str = DEFAULT_MINIO_ENDPOINT,
-    minio_secret_name: str = DEFAULT_MINIO_SECRET,
+    minio_secret_name: str = DEFAULT_MINIO_SECRET_NAME,
     # Monitoring options
     log_level: str = "INFO",
     enable_tensorboard: bool = True,
@@ -233,31 +239,16 @@ def kronodroid_autoencoder_training_pipeline(
     kubernetes.set_image_pull_policy(task=train_task, policy="IfNotPresent")
 
     # Inject LakeFS credentials
-    # KFP 2.x format: {secret_key: env_var_name}
-    kubernetes.use_secret_as_env(
-        task=train_task,
-        secret_name=lakefs_secret_name,
-        secret_key_to_env={
-            "LAKEFS_ACCESS_KEY_ID": "LAKEFS_ACCESS_KEY_ID",
-            "LAKEFS_SECRET_ACCESS_KEY": "LAKEFS_SECRET_ACCESS_KEY",
-        },
-    )
+    use_lakefs_credentials(train_task, secret_name=lakefs_secret_name)
 
     # Inject MinIO credentials (for MLflow artifact storage)
-    kubernetes.use_secret_as_env(
-        task=train_task,
-        secret_name=minio_secret_name,
-        secret_key_to_env={
-            "AWS_ACCESS_KEY_ID": "AWS_ACCESS_KEY_ID",
-            "AWS_SECRET_ACCESS_KEY": "AWS_SECRET_ACCESS_KEY",
-        },
-    )
+    use_minio_credentials(train_task, secret_name=minio_secret_name)
 
     # Mount Feast config
-    kubernetes.use_config_map_as_volume(
-        task=train_task,
-        config_map_name="feast-config",
-        mount_path="/feast",
+    mount_feast_repo(
+        train_task,
+        config_map_name=DEFAULT_FEAST_CONFIGMAP_NAME,
+        mount_path=feast_repo_path,
     )
 
     # Step 2: Optionally create LakeFS tag for reproducibility
@@ -277,14 +268,7 @@ def kronodroid_autoencoder_training_pipeline(
         tag_task.set_cpu_limit("500m")
 
         # Inject LakeFS credentials (hardcoded secret name for KFP v2 compatibility)
-        kubernetes.use_secret_as_env(
-            task=tag_task,
-            secret_name="lakefs-credentials",
-            secret_key_to_env={
-                "LAKEFS_ACCESS_KEY_ID": "LAKEFS_ACCESS_KEY_ID",
-                "LAKEFS_SECRET_ACCESS_KEY": "LAKEFS_SECRET_ACCESS_KEY",
-            },
-        )
+        use_lakefs_credentials(tag_task, secret_name=DEFAULT_LAKEFS_SECRET_NAME)
 
 
 @dsl.pipeline(
@@ -298,16 +282,16 @@ def kronodroid_full_training_pipeline(
     minio_endpoint: str = DEFAULT_MINIO_ENDPOINT,
     minio_bucket: str = "dlt-data",
     minio_prefix: str = "kronodroid_raw",
-    minio_secret_name: str = DEFAULT_MINIO_SECRET,
+    minio_secret_name: str = DEFAULT_MINIO_SECRET_NAME,
     # LakeFS configuration
     lakefs_endpoint: str = DEFAULT_LAKEFS_ENDPOINT,
     lakefs_repository: str = DEFAULT_LAKEFS_REPOSITORY,
     lakefs_ref: str = DEFAULT_LAKEFS_BRANCH,
-    lakefs_secret_name: str = DEFAULT_LAKEFS_SECRET,
+    lakefs_secret_name: str = DEFAULT_LAKEFS_SECRET_NAME,
     # Iceberg configuration
     iceberg_catalog: str = DEFAULT_ICEBERG_CATALOG,
     iceberg_database: str = DEFAULT_ICEBERG_DATABASE,
-    source_table: str = DEFAULT_SOURCE_TABLE,
+    source_table: str = DEFAULT_ICEBERG_SOURCE_TABLE,
     # MLflow configuration
     mlflow_tracking_uri: str = DEFAULT_MLFLOW_TRACKING_URI,
     mlflow_experiment_name: str = DEFAULT_MLFLOW_EXPERIMENT,
@@ -407,28 +391,14 @@ def kronodroid_full_training_pipeline(
     train_task.set_cpu_limit("4")
     train_task.set_cpu_request("2")
 
-    kubernetes.use_secret_as_env(
-        task=train_task,
-        secret_name=lakefs_secret_name,
-        secret_key_to_env={
-            "LAKEFS_ACCESS_KEY_ID": "LAKEFS_ACCESS_KEY_ID",
-            "LAKEFS_SECRET_ACCESS_KEY": "LAKEFS_SECRET_ACCESS_KEY",
-        },
-    )
+    use_lakefs_credentials(train_task, secret_name=lakefs_secret_name)
 
-    kubernetes.use_secret_as_env(
-        task=train_task,
-        secret_name=minio_secret_name,
-        secret_key_to_env={
-            "AWS_ACCESS_KEY_ID": "AWS_ACCESS_KEY_ID",
-            "AWS_SECRET_ACCESS_KEY": "AWS_SECRET_ACCESS_KEY",
-        },
-    )
+    use_minio_credentials(train_task, secret_name=minio_secret_name)
 
-    kubernetes.use_config_map_as_volume(
-        task=train_task,
-        config_map_name="feast-config",
-        mount_path="/feast",
+    mount_feast_repo(
+        train_task,
+        config_map_name=DEFAULT_FEAST_CONFIGMAP_NAME,
+        mount_path=feast_repo_path,
     )
 
     # Step 3: Create LakeFS tag
@@ -447,14 +417,7 @@ def kronodroid_full_training_pipeline(
         tag_task.set_memory_request("256Mi")
         tag_task.set_cpu_limit("500m")
 
-        kubernetes.use_secret_as_env(
-            task=tag_task,
-            secret_name="lakefs-credentials",
-            secret_key_to_env={
-                "LAKEFS_ACCESS_KEY_ID": "LAKEFS_ACCESS_KEY_ID",
-                "LAKEFS_SECRET_ACCESS_KEY": "LAKEFS_SECRET_ACCESS_KEY",
-            },
-        )
+        use_lakefs_credentials(tag_task, secret_name=DEFAULT_LAKEFS_SECRET_NAME)
 
 
 def compile_pipeline(output_path: str = "kronodroid_autoencoder_training_pipeline.yaml") -> str:
