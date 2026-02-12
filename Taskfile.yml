@@ -994,14 +994,14 @@ tasks:
   autoencoder-image:build:
     desc: Build the autoencoder training Docker image
     vars:
-      IMAGE_TAG: '{{.IMAGE_TAG | default "v6"}}'
+      IMAGE_TAG: '{{.IMAGE_TAG | default "v8"}}'
     cmds:
       - docker build -t "dfp-autoencoder-train:{{.IMAGE_TAG}}" -f tools/docker/Dockerfile.autoencoder_train .
 
   autoencoder-image:load:
     desc: Load autoencoder training image into kind cluster
     vars:
-      IMAGE_TAG: '{{.IMAGE_TAG | default "v6"}}'
+      IMAGE_TAG: '{{.IMAGE_TAG | default "v8"}}'
     cmds:
       - kind load docker-image "dfp-autoencoder-train:{{.IMAGE_TAG}}" --name "{{.CLUSTER_NAME}}"
 
@@ -1025,7 +1025,7 @@ tasks:
         echo "=== Checking pipeline images in kind cluster ==="
         echo ""
 
-        IMAGES=("dfp-spark:latest" "dfp-lakefs-component:v2" "dfp-autoencoder-train:v6")
+        IMAGES=("dfp-spark:latest" "dfp-lakefs-component:v2" "dfp-autoencoder-train:v8")
         ERRORS=0
 
         for IMG in "${IMAGES[@]}"; do

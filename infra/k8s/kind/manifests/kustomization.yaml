@@ -4,6 +4,7 @@ namespace: dfp
 resources:
   - namespace.yaml
   - minio.yaml
+  - minio-bootstrap.yaml
   - redis.yaml
   - postgres-lakefs.yaml
   - lakefs.yaml

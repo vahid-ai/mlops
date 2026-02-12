@@ -245,10 +245,11 @@ def kronodroid_autoencoder_training_pipeline(
     use_minio_credentials(train_task, secret_name=minio_secret_name)
 
     # Mount Feast config
+    # KFP kubernetes volume helpers require a static mount path (not a pipeline parameter).
     mount_feast_repo(
         train_task,
         config_map_name=DEFAULT_FEAST_CONFIGMAP_NAME,
-        mount_path=feast_repo_path,
+        mount_path=DEFAULT_FEAST_MOUNT_PATH,
     )
 
     # Step 2: Optionally create LakeFS tag for reproducibility
@@ -395,10 +396,11 @@ def kronodroid_full_training_pipeline(
 
     use_minio_credentials(train_task, secret_name=minio_secret_name)
 
+    # KFP kubernetes volume helpers require a static mount path (not a pipeline parameter).
     mount_feast_repo(
         train_task,
         config_map_name=DEFAULT_FEAST_CONFIGMAP_NAME,
-        mount_path=feast_repo_path,
+        mount_path=DEFAULT_FEAST_MOUNT_PATH,
     )
 
     # Step 3: Create LakeFS tag

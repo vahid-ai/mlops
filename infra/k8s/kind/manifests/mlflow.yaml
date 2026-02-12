@@ -36,6 +36,8 @@ spec:
               value: http://minio.dfp.svc.cluster.local:9000
             - name: AWS_DEFAULT_REGION
               value: us-east-1
+            - name: MLFLOW_SERVER_ALLOWED_HOSTS
+              value: "*"
           ports:
             - containerPort: 5000
           volumeMounts:

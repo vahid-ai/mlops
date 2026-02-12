@@ -1,0 +1,26 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: minio-bootstrap
+  namespace: dfp
+spec:
+  ttlSecondsAfterFinished: 600
+  backoffLimit: 6
+  template:
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: mc
+          image: minio/mc:latest
+          command:
+            - /bin/sh
+            - -ec
+            - |
+              until mc alias set local http://minio:9000 minioadmin minioadmin; do
+                echo "Waiting for MinIO..."
+                sleep 3
+              done
+
+              # Create buckets needed by local stack components (idempotent).
+              mc mb -p local/mlflow-artifacts || true
+              mc mb -p local/dlt-data || true

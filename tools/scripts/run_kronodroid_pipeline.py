@@ -176,6 +176,8 @@ def _ensure_k8s_secrets(
     lakefs_secret_name: str,
 ) -> None:
     """Ensure credential secrets exist."""
+    import base64
+
     from kubernetes import client, config
     from kubernetes.client.rest import ApiException
 
@@ -217,6 +219,18 @@ def _ensure_k8s_secrets(
     lakefs_access_key = os.getenv("LAKEFS_ACCESS_KEY_ID", "")
     lakefs_secret_key = os.getenv("LAKEFS_SECRET_ACCESS_KEY", "")
 
+    # Fallback for Kubeflow: reuse artifact-store credentials if MINIO_* env vars are absent.
+    if not minio_access_key or not minio_secret_key:
+        try:
+            artifact_secret = core_api.read_namespaced_secret("mlpipeline-minio-artifact", namespace)
+            encoded_access = (artifact_secret.data or {}).get("accesskey")
+            encoded_secret = (artifact_secret.data or {}).get("secretkey")
+            if encoded_access and encoded_secret:
+                minio_access_key = base64.b64decode(encoded_access).decode("utf-8")
+                minio_secret_key = base64.b64decode(encoded_secret).decode("utf-8")
+        except Exception:
+            pass
+
     _upsert_secret(
         minio_secret_name,
         {
@@ -230,6 +244,51 @@ def _ensure_k8s_secrets(
             "LAKEFS_ACCESS_KEY_ID": lakefs_access_key,
             "LAKEFS_SECRET_ACCESS_KEY": lakefs_secret_key,
         },
+    )
+
+
+def _ensure_k8s_feast_configmap(
+    *,
+    namespace: str,
+    config_map_name: str,
+    feast_config_path: Path,
+) -> None:
+    """Ensure Feast config ConfigMap exists in the target namespace."""
+    from kubernetes import client, config
+    from kubernetes.client.rest import ApiException
+
+    if not feast_config_path.exists():
+        raise FileNotFoundError(
+            f"Feast config not found at {feast_config_path}. "
+            "Expected feature_stores/feast_store/feature_store.yaml"
+        )
+
+    try:
+        config.load_incluster_config()
+    except config.ConfigException:
+        config.load_kube_config()
+
+    core_api = client.CoreV1Api()
+    data = {"feature_store.yaml": feast_config_path.read_text()}
+
+    try:
+        core_api.read_namespaced_config_map(config_map_name, namespace)
+    except ApiException as e:
+        if e.status != 404:
+            raise
+        core_api.create_namespaced_config_map(
+            namespace,
+            client.V1ConfigMap(
+                metadata=client.V1ObjectMeta(name=config_map_name),
+                data=data,
+            ),
+        )
+        return
+
+    core_api.patch_namespaced_config_map(
+        config_map_name,
+        namespace,
+        {"data": data},
     )
 
 
@@ -1459,6 +1518,7 @@ def commit_to_lakefs(branch: str, message: str) -> bool:
 def run_autoencoder_training(
     lakefs_branch: str = "dev",
     kfp_host: str | None = None,
+    kfp_namespace: str = "kubeflow",
     max_epochs: int = 10,
     batch_size: int = 512,
     learning_rate: float = 0.001,
@@ -1472,6 +1532,7 @@ def run_autoencoder_training(
     Args:
         lakefs_branch: LakeFS branch/ref containing the training data
         kfp_host: Kubeflow Pipelines host URL
+        kfp_namespace: Kubeflow namespace where pipeline pods run
         max_epochs: Maximum training epochs
         batch_size: Training batch size
         learning_rate: Optimizer learning rate
@@ -1494,6 +1555,11 @@ def run_autoencoder_training(
     try:
         import kfp
 
+        from orchestration.kubeflow.dfp_kfp.config import (
+            DEFAULT_FEAST_CONFIGMAP_NAME,
+            DEFAULT_LAKEFS_SECRET_NAME,
+            DEFAULT_MINIO_SECRET_NAME,
+        )
         from orchestration.kubeflow.dfp_kfp.pipelines.kronodroid_autoencoder_training_pipeline import (
             kronodroid_autoencoder_training_pipeline,
         )
@@ -1502,11 +1568,24 @@ def run_autoencoder_training(
         if kfp_host is None:
             kfp_host = os.getenv("KFP_HOST", "http://localhost:8080")
         print(f"  KFP host: {kfp_host}")
+        print(f"  KFP namespace: {kfp_namespace}")
 
         # Construct cluster-internal endpoints
         lakefs_endpoint = "http://lakefs.dfp:8000"
         minio_endpoint = "http://minio.dfp:9000"
         mlflow_tracking_uri = "http://mlflow.dfp:5000"
+
+        # Ensure KFP namespace has required secrets + Feast config before pod startup.
+        _ensure_k8s_secrets(
+            namespace=kfp_namespace,
+            minio_secret_name=DEFAULT_MINIO_SECRET_NAME,
+            lakefs_secret_name=DEFAULT_LAKEFS_SECRET_NAME,
+        )
+        _ensure_k8s_feast_configmap(
+            namespace=kfp_namespace,
+            config_map_name=DEFAULT_FEAST_CONFIGMAP_NAME,
+            feast_config_path=PROJECT_ROOT / "feature_stores" / "feast_store" / "feature_store.yaml",
+        )
 
         client = kfp.Client(host=kfp_host)
 
@@ -1765,6 +1844,7 @@ def main():
         success = run_autoencoder_training(
             lakefs_branch=args.branch,
             kfp_host=args.kfp_host,
+            kfp_namespace=args.kfp_namespace,
             max_epochs=args.max_epochs,
             batch_size=args.batch_size,
             learning_rate=args.learning_rate,

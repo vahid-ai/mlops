@@ -17,9 +17,6 @@ from typing import NamedTuple
 
 from kfp import dsl
 
-from orchestration.kubeflow.dfp_kfp.config import DEFAULT_MINIO_ENDPOINT
-
-
 class TrainAutoencoderOutput(NamedTuple):
     """Output from the autoencoder training component."""
 
@@ -64,7 +61,7 @@ def train_kronodroid_autoencoder_op(
     seed: int,
     max_rows_per_split: int,
     # MLflow artifact storage (S3/MinIO)
-    minio_endpoint: str = DEFAULT_MINIO_ENDPOINT,
+    minio_endpoint: str = "http://minio.dfp:9000",
     # Logging and monitoring config
     log_level: str = "INFO",
     enable_tensorboard: bool = True,
