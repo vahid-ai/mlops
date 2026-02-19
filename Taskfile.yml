@@ -253,12 +253,8 @@ tasks:
         }
         
         echo ""
-        echo "Step 5/8: Building and loading Spark image..."
-        task spark-image
-
-        echo ""
-        echo "Step 5b/8: Building and loading LakeFS component image..."
-        task lakefs-component-image
+        echo "Step 5/8: Building and loading pipeline images..."
+        task pipeline-images
         
         echo ""
         echo "Step 6/8: Waiting for all pods to be ready..."
